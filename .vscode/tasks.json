@@ -1,0 +1,40 @@
+// .vscode/tasks.json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Current dbt Model",
+      "type": "shell",
+      "command": "uv",
+      "args": [
+        "run",
+        "python",
+        "${workspaceFolder}/.vscode/run_current_model.py",
+        "${file}"
+      ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Show Current dbt Model Tale",
+      "type": "shell",
+      "command": "uv",
+      "args": [
+        "run",
+        "python",
+        "${workspaceFolder}/.vscode/show_current_table.py",
+        "${file}"
+      ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
