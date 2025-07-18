@@ -20,7 +20,7 @@ def main():
 
     cmd = (
         f"uv run dbt run --select {model_name} --profiles-dir . && "
-        f"{duckdb_cli_path} {db_path} -c 'SELECT * FROM {table_name} LIMIT 30 ;'"
+        f"{duckdb_cli_path} {db_path} -c 'SELECT * FROM {table_name} LIMIT 5;'"
     )
 
     subprocess.run(cmd, shell=True, check=True, cwd=project_dir)
