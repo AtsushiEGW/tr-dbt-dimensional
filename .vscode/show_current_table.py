@@ -19,7 +19,8 @@ def main():
     table_name = f'"{schema_name}"."{model_name}"'
 
     cmd = (
-        f"{duckdb_cli_path} {db_path} -c 'summarize {table_name};'"
+        f"{duckdb_cli_path} {db_path} -c "
+        f"'select column_name, column_type, min, max, approx_unique, count, null_percentage from (summarize {table_name});'"
     )
 
     subprocess.run(cmd, shell=True, check=True, cwd=project_dir)
