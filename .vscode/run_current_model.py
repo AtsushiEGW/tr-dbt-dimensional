@@ -19,7 +19,7 @@ def main():
     table_name = f'"{schema_name}"."{model_name}"'
 
     cmd = (
-        f"uv run dbt run --select {model_name} --profiles-dir . && "
+        f"dbt run --select {model_name} --profiles-dir . && "
         f"{duckdb_cli_path} {db_path} -c 'SELECT * FROM {table_name} LIMIT 5;'"
     )
 

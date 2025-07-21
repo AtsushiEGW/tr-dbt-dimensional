@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/app/Dockerfile
+    container_name: app
+
+    # volumes
+      # - ../test-docker:/workspaces/test-docker:cached
+
+    # Overrides default command so things don't shut down after the process ends.
+    command: sleep infinity
+
+    # Runs app on the same network as the database container, allows "forwardPorts" in devcontainer.json function.
+    networks: 
+      - default
+
+    # Use "forwardPorts" in **devcontainer.json** to forward an app port locally.
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
+
+  metaduck:
+    platform: linux/amd64 # apple silicon compatibility
+    build:
+      context: ..
+      dockerfile: docker/metabase/Dockerfile
+    container_name: metaduck
+    ports:
+      - "3000:3000"  # Forward Metabase port to host
+    environment:
+      MB_PLUGINS_DIR: /plugins
+    networks:
+      - default
+    # volumes:
+      # - ../test-docker:/workspaces/test-docker:cached
+
+networks:
+  default:
+    driver: bridge
