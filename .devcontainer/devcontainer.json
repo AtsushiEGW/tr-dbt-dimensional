@@ -1,53 +1,70 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/postgres
 {
-	"name": "training dimensional modeling with dbt",
-	"dockerComposeFile": "../docker/docker-compose.yml",
+	"name": "Python 3 & PostgreSQL",
+	"dockerComposeFile": ["docker-compose.yml"],
 	"service": "app",
-	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	"features": {
-		"ghcr.io/eitsupi/devcontainer-features/duckdb-cli:1": {}
-	},
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// This can be used to network with other containers or the host.
-	// "forwardPorts": [5000, 5432],
+	"runServices": ["app", "db", "metabase"],
+	"waitForServices": ["db"],
+	"waitForPosrts": [3000],
+	"serviceStartTimeout": 120000,
 
-	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pip install --user -r requirements.txt",
+	"workspaceFolder": "/workspace",
+	"shutdownAction": "stopCompose",
 
-	// Configure tool-specific properties.
 	"customizations": {
 		"vscode": {
 			"extensions": [
 				"ms-python.python",
 				"ms-python.vscode-pylance",
-				"ms-toolsai.jupyter"
+				"ms-toolsai.jupyter",
+				"ms-toolsai.jupyter-keymap",
+				"ms-toolsai.jupyter-renderers",
+				"ms-toolsai.vscode-jupyter-cell-tags"
 			],
 			"settings": {
-				"python.defaultInterpreterPath": "/usr/local/bin/python3",
-				"terminal.integrated.defaultProfile.linux": "zsh"
+				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"python.analysis.typeCheckingMode": "basic",
+				"python.analysis.autoSearchPaths": true,
+				"python.analysis.useLibraryCodeForTypes": true,
+				"python.formatting.provider": "black",
+				"editor.formatOnSave": true
 			}
 		}
 	},
-	"mounts": [
-		// Mount the workspace folder to the container.
-		"source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
-		// 以下 dotfiles をローカルのホームディレクトリからコンテナのホームディレクトリにマウントする
-		// zsh
-		"source=${localEnv:HOME}/.zshrc,target=/home/vscode/.zshrc,type=bind,consistency=cached,readonly",
-		"source=${localEnv:HOME}/.zprofile,target=/home/vscode/.zprofile,type=bind,consistency=cached,readonly",
-		"source=${localEnv:HOME}/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached,readonly",
-		"source=${localEnv:HOME}/.zsh_sessions,target=/home/vscode/.zsh_sessions,type=bind,consistency=cached,readonly",
-		// config
-		"source=${localEnv:HOME}/.config,target=/home/vscode/.zsh_config,type=bind,consistency=cached,readonly",
-		// tmux
-		"source=${localEnv:HOME}/.tmux.conf,target=/home/vscode/.tmux.conf,type=bind,consistency=cached,readonly"
 
+	"postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+	"forwardPorts": [8000, 5432, 3000],
+	"remoteUser": "vscode",
 
-	]
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installZsh": true,
+			"installOhMyZsh": true,
+			"installOhMyZshConfig": true,
+			"upgradePackages": true,
+			"username": "automatic",
+			"userUid": "automatic",
+			"userGid": "automatic"
+		},
+		"ghcr.io/va-h/devcontainers-features/uv:1": {
+			"shellautocompletion": true,
+			"version": "latest"
+		}
+	}
 
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	// "features": {},
 
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// This can be used to network with other containers or the host.
+	// "forwardPorts": [5000, 5432],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "pip install --user -r requirements.txt",
+
+	// Configure tool-specific properties.
+	// "customizations": {},
 
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"

@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    depends_on:
+      - db
+    env_file:
+      - ../.env
+    volumes:
+      - ..:/workspace:cached
+    command: sleep infinity
+    # Runs app on the same network as the database container, allows "forwardPorts" in devcontainer.json function.
+    ports:
+      - "8000:8000"  # Change this port as needed for your application.
+
+    # Use "forwardPorts" in **devcontainer.json** to forward an app port locally.
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
+
+  db:
+    image: postgres:latest
+    restart: unless-stopped 
+    env_file:
+      - ../.env
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" 
+
+    # Add "forwardPorts": ["5432"] to **devcontainer.json** to forward PostgreSQL locally.
+    # (Adding the "ports" property to this file will not forward from a Codespace.)
+
+  metabase:
+    image: metabase/metabase:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+    env_file:
+      - ../.env
+    ports:
+      - "3000:3000"  # Change this port as needed for Metabase.
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: db
+      MB_DB_PORT: 5432
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_DB_DBNAME: ${POSTGRES_DB}
+    volumes:
+      - metabase-data:/metabase-data
+
+volumes:
+  postgres-data:
+  metabase-data:
+    # Use named volumes to persist data across container restarts.

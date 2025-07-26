@@ -1,4 +1,4 @@
 dbt-core
-dbt-duckdb
 sqlfluff
 sqlfluff-templater-dbt
+dbt-postgres

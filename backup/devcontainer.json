@@ -1,0 +1,54 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/postgres
+{
+	"name": "training dimensional modeling with dbt",
+	"dockerComposeFile": "../docker/docker-compose.yml",
+	"service": "app",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	"features": {
+		"ghcr.io/eitsupi/devcontainer-features/duckdb-cli:1": {}
+	},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// This can be used to network with other containers or the host.
+	// "forwardPorts": [5000, 5432],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": "pip install --user -r requirements.txt",
+
+	// Configure tool-specific properties.
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"ms-toolsai.jupyter"
+			],
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/local/bin/python3",
+				"terminal.integrated.defaultProfile.linux": "zsh"
+			}
+		}
+	},
+	"mounts": [
+		// Mount the workspace folder to the container.
+		"source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
+		// 以下 dotfiles をローカルのホームディレクトリからコンテナのホームディレクトリにマウントする
+		// zsh
+		"source=${localEnv:HOME}/.zshrc,target=/home/vscode/.zshrc,type=bind,consistency=cached,readonly",
+		"source=${localEnv:HOME}/.zprofile,target=/home/vscode/.zprofile,type=bind,consistency=cached,readonly",
+		"source=${localEnv:HOME}/.zsh_history,target=/home/vscode/.zsh_history,type=bind,consistency=cached,readonly",
+		"source=${localEnv:HOME}/.zsh_sessions,target=/home/vscode/.zsh_sessions,type=bind,consistency=cached,readonly",
+		// config
+		"source=${localEnv:HOME}/.config,target=/home/vscode/.zsh_config,type=bind,consistency=cached,readonly",
+		// tmux
+		"source=${localEnv:HOME}/.tmux.conf,target=/home/vscode/.tmux.conf,type=bind,consistency=cached,readonly"
+
+
+	]
+
+
+
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+}
