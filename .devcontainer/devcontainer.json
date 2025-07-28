@@ -4,9 +4,9 @@
 	"name": "Python 3 & PostgreSQL",
 	"dockerComposeFile": ["docker-compose.yml"],
 	"service": "app",
-	"runServices": ["app", "db", "metabase"],
-	"waitForServices": ["db"],
-	"waitForPosrts": [3000],
+	"runServices": ["app", "db", "superset"],
+	"waitForServices": ["db", "superset"],
+	"waitForPorts": [5432, 8088],
 	"serviceStartTimeout": 120000,
 
 	"workspaceFolder": "/workspace",
@@ -34,7 +34,7 @@
 	},
 
 	"postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
-	"forwardPorts": [8000, 5432, 3000],
+	"forwardPorts": [8000, 5432, 8088],
 	"remoteUser": "vscode",
 
 	"features": {
