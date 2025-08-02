@@ -1,71 +1,40 @@
-// For format details, see https://aka.ms/devcontainer.json. For config options, see the
-// README at: https://github.com/devcontainers/templates/tree/main/src/postgres
 {
-	"name": "Python 3 & PostgreSQL",
-	"dockerComposeFile": ["docker-compose.yml"],
-	"service": "app",
-	"runServices": ["app", "db", "superset"],
-	"waitForServices": ["db", "superset"],
-	"waitForPorts": [5432, 8088],
-	"serviceStartTimeout": 120000,
+  "name": "dimensional modeling container",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "app",
+  "workspaceFolder": "/workspace/project",
+  "shutdownAction": "stopCompose",
 
-	"workspaceFolder": "/workspace",
-	"shutdownAction": "stopCompose",
+  // ホスト dotfiles をマウント
+  "mounts": [
+    "source=${localEnv:HOME}/.dotfiles,target=/home/dev/.dotfiles,type=bind,consistency=cached"
+  ],
 
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"ms-python.python",
-				"ms-python.vscode-pylance",
-				"ms-toolsai.jupyter",
-				"ms-toolsai.jupyter-keymap",
-				"ms-toolsai.jupyter-renderers",
-				"ms-toolsai.vscode-jupyter-cell-tags"
-			],
-			"settings": {
-				"python.defaultInterpreterPath": "/usr/local/bin/python",
-				"python.analysis.typeCheckingMode": "basic",
-				"python.analysis.autoSearchPaths": true,
-				"python.analysis.useLibraryCodeForTypes": true,
-				"python.formatting.provider": "black",
-				"editor.formatOnSave": true
-			}
-		}
-	},
+  // コンテナ起動後に dotfiles のインストールと Python 依存解決を実行
+  "postCreateCommand": "chmod +x /home/dev/.dotfiles/install.sh && /home/dev/.dotfiles/install.sh && pip install --no-cache-dir -r /workspace/project/requirements.txt",
 
-	"postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
-	"forwardPorts": [8000, 5432, 8088],
-	"remoteUser": "vscode",
+  // VS Code ポートフォワード
+  "forwardPorts": [5432, 3000],
+  "remoteUser": "dev",
 
-	"features": {
-		"ghcr.io/devcontainers/features/common-utils:2": {
-			"installZsh": true,
-			"installOhMyZsh": true,
-			"installOhMyZshConfig": true,
-			"upgradePackages": true,
-			"username": "automatic",
-			"userUid": "automatic",
-			"userGid": "automatic"
-		},
-		"ghcr.io/va-h/devcontainers-features/uv:1": {
-			"shellautocompletion": true,
-			"version": "latest"
-		}
-	}
-
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// This can be used to network with other containers or the host.
-	// "forwardPorts": [5000, 5432],
-
-	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "pip install --user -r requirements.txt",
-
-	// Configure tool-specific properties.
-	// "customizations": {},
-
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-keymap",
+        "ms-toolsai.jupyter-renderers",
+        "ms-toolsai.vscode-jupyter-cell-tags"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.analysis.typeCheckingMode": "basic",
+        "python.analysis.autoSearchPaths": true,
+        "python.analysis.useLibraryCodeForTypes": true,
+        "python.formatting.provider": "black",
+        "editor.formatOnSave": true
+      }
+    }
+  }
 }

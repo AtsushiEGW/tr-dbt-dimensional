@@ -1,0 +1,71 @@
+version: '3.8'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    # ホストのUID/GIDをマウント時に合わせる（.envまたはシェル環境でLOCAL_UID/LOCAL_GIDを定義）
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    volumes:
+      # プロジェクトルート全体をコンテナの /workspace/project にマウント
+      - ./:/workspace/project:cached
+      # ホストの dotfiles を読み取り専用でマウント
+      - ${HOME}/.dotfiles:/home/dev/.dotfiles:ro,consistency=cached
+      # dbt 等が参照する .env ファイル
+      - ./.env:/workspace/project/.env:ro
+    env_file:
+      - ./.env
+    working_dir: /workspace/project
+    command: sleep infinity
+    depends_on:
+      - db
+    networks:
+      - metanet1
+
+  db:
+    image: postgres:15-alpine
+    container_name: postgres
+    hostname: postgres
+    restart: always
+    env_file:
+      - ./.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - metanet1
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    hostname: metabase
+    restart: always
+    depends_on:
+      - db
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=${POSTGRES_DB:-metabase}
+      - MB_DB_HOST=postgres
+      - MB_DB_PORT=${POSTGRES_PORT:-5432}
+      - MB_DB_USER=${POSTGRES_USER:-postgres}
+      - MB_DB_PASS=${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      # javaのエントロピー供給のためにホストの /dev/urandom をマウント
+      - /dev/urandom:/dev/random:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail -I http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - metanet1
+    ports:
+      - "3000:3000"
+
+networks:
+  metanet1:
+    driver: bridge
+
+volumes:
+  pgdata:
