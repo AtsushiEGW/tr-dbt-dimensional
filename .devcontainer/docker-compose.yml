@@ -17,92 +17,75 @@ services:
     # Use "forwardPorts" in **devcontainer.json** to forward an app port locally.
     # (Adding the "ports" property to this file will not forward from a Codespace.)
 
+
+
   db:
     image: postgres:latest
-    restart: unless-stopped 
     env_file:
       - ../.env
+    restart: unless-stopped
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     ports:
-      - "5432:5432" 
-
-    # Add "forwardPorts": ["5432"] to **devcontainer.json** to forward PostgreSQL locally.
-    # (Adding the "ports" property to this file will not forward from a Codespace.)
-
+      - "5432:5432"
 
   superset:
     build:
       context: .
       dockerfile: superset.Dockerfile
     image: apache/superset:custom
-    restart: unless-stopped
-    depends_on:
-      - db
     env_file:
       - ../.env
-    ports:
-      - "8088:8088"  # Change this port as needed for Superset.
     environment:
       SUPERSET_DATABASE_URI: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       SUPERSET_HOME: /app/superset_home
       SUPERSET_CONFIG_PATH: /app/superset_home/superset_config.py
     volumes:
       - superset-data:/app/superset_home
-      - ../superset_config.py:/app/superset_home/superset_config.py
+      - ../superset_config.py:/app/superset_home/superset_config.py:ro
+    ports:
+      - "8088:8088"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
     healthcheck:
-      disable: true  # Disable healthcheck to avoid issues with Superset startup.
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 5
+      disable: true
 
   superset-init:
     image: apache/superset:custom
-    volumes:
-      - superset-data:/app/superset_home
-    restart: "no"
-    depends_on:
-      superset:
-        condition: service_started
     env_file:
       - ../.env
-    entrypoint: >
-      /bin/bash -c "
+    environment:
+      # → superset と同じ DATABASE_URI を必ず指定
+      SUPERSET_DATABASE_URI: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      SUPERSET_HOME: /app/superset_home
+      SUPERSET_CONFIG_PATH: /app/superset_home/superset_config.py
+    volumes:
+      - superset-data:/app/superset_home
+      - ../superset_config.py:/app/superset_home/superset_config.py:ro
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
         superset db upgrade &&
         superset fab create-admin \
-          --username admin \
+          --username ${SUPERSET_ADMIN_USER:-admin} \
           --firstname Superset \
           --lastname Admin \
           --email egwats@gmail.com \
           --password ${SUPERSET_ADMIN_PASSWORD:-admin} &&
         superset init
-      "
+    depends_on:
+      superset:
+        condition: service_started
+    restart: "no"
 
 volumes:
   postgres-data:
   superset-data:
-    # Use named volumes to persist data across container restarts.
-
-
-
-#   metabase:
-#     image: metabase/metabase:latest
-#     restart: unless-stopped
-#     depends_on:
-#       - db
-#     env_file:
-#       - ../.env
-#     ports:
-#       - "3000:3000"  # Change this port as needed for Metabase.
-#     environment:
-#       MB_DB_TYPE: postgres
-#       MB_DB_HOST: db
-#       MB_DB_PORT: 5432
-#       MB_DB_USER: ${POSTGRES_USER}
-#       MB_DB_PASS: ${POSTGRES_PASSWORD}
-#       MB_DB_DBNAME: ${POSTGRES_DB}
-#     volumes:
-#       - metabase-data:/metabase-data
-
