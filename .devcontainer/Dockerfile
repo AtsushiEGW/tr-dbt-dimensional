@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # sudo を含む最低限のパッケージ
 RUN apt-get update \
- && apt-get install -y --no-install-recommends sudo \
+ && apt-get install -y --no-install-recommends sudo zsh\
  && rm -rf /var/lib/apt/lists/*
 
 # デフォルトユーザー作成
@@ -16,6 +16,9 @@ RUN groupadd --gid ${USER_GID} ${USERNAME} \
  && useradd --create-home --shell /bin/bash --uid ${USER_UID} --gid ${USER_GID} ${USERNAME} \
  && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
  && chmod 0440 /etc/sudoers.d/${USERNAME}
+
+# デフォルトシェルを zsh に変更
+RUN sed -i 's#\(/home/dev\):/bin/bash#\1:/bin/zsh#' /etc/passwd 
 
 # 作業ディレクトリ
 WORKDIR /workspace/project

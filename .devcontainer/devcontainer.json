@@ -11,7 +11,7 @@
   ],
 
   // コンテナ起動後に dotfiles のインストールと Python 依存解決を実行
-  "postCreateCommand": "chmod +x /home/dev/.dotfiles/install.sh && /home/dev/.dotfiles/install.sh && pip install --no-cache-dir -r /workspace/project/requirements.txt",
+  "postCreateCommand": "chmod +x /home/dev/.dotfiles/install_for_linux.sh && /home/dev/.dotfiles/install_for_linux.sh && pip install --no-cache-dir -r /workspace/project/requirements.txt",
 
   // VS Code ポートフォワード
   "forwardPorts": [5432, 3000],
@@ -33,7 +33,8 @@
         "python.analysis.autoSearchPaths": true,
         "python.analysis.useLibraryCodeForTypes": true,
         "python.formatting.provider": "black",
-        "editor.formatOnSave": true
+        "editor.formatOnSave": true,
+        "terminal.integrated.shell.linux": "/bin/bash/zsh"
       }
     }
   }
