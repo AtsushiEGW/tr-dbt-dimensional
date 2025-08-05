@@ -2,3 +2,8 @@ dbt-core
 sqlfluff
 sqlfluff-templater-dbt
 dbt-postgres
+python-dotenv
+ruff
+psycopg2-binary
+requests
+pandas
