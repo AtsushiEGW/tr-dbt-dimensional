@@ -5,13 +5,17 @@
   "workspaceFolder": "/workspace/project",
   "shutdownAction": "stopCompose",
 
-  // ホスト dotfiles をマウント
-  "mounts": [
-    "source=${localEnv:HOME}/.dotfiles,target=/home/dev/.dotfiles,type=bind,consistency=cached"
-  ],
-
-  // コンテナ起動後に dotfiles のインストールと Python 依存解決を実行
-  "postCreateCommand": "chmod +x /home/dev/.dotfiles/install_for_linux.sh && /home/dev/.dotfiles/install_for_linux.sh && pip install --no-cache-dir -r /workspace/project/requirements.txt && source ~/.zshrc",
+  "features":{
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true,
+      "zshTheme": "agnoster",
+      "installOhMyZsh": true,
+      "installOhMyZshConfig": true,
+      "ohMyZshPlugins": ["git", "zsh-autosuggestions", "zsh-syntax-highlighting"],
+      "upgradePackages": true
+    }
+  },
 
   // VS Code ポートフォワード
   "forwardPorts": [5432, 3000],

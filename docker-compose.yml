@@ -9,8 +9,6 @@ services:
     volumes:
       # プロジェクトルート全体をコンテナの /workspace/project にマウント
       - ./:/workspace/project:cached
-      # ホストの dotfiles を読み取り専用でマウント
-      - ${HOME}/.dotfiles:/home/dev/.dotfiles:ro,consistency=cached
       # dbt 等が参照する .env ファイル
       - ./.env:/workspace/project/.env:ro
     env_file:
@@ -23,7 +21,7 @@ services:
       - metanet1
 
   db:
-    image: postgres:15-alpine
+    image: postgres:latest
     container_name: postgres
     hostname: postgres
     restart: always
