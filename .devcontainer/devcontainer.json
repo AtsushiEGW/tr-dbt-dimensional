@@ -12,7 +12,7 @@
       "zshTheme": "agnoster",
       "installOhMyZsh": true,
       "installOhMyZshConfig": true,
-      "ohMyZshPlugins": ["git", "zsh-autosuggestions", "zsh-syntax-highlighting"],
+      "ohMyZshPlugins": "git zsh-autosuggestions zsh-syntax-highlighting",
       "upgradePackages": true
     }
   },
@@ -38,7 +38,7 @@
         "python.analysis.useLibraryCodeForTypes": true,
         "python.formatting.provider": "black",
         "editor.formatOnSave": true,
-        "terminal.integrated.shell.linux": "/bin/bash/zsh"
+        "terminal.integrated.shell.linux": "/bin/zsh"
       }
     }
   }

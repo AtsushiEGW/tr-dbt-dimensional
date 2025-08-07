@@ -9,8 +9,19 @@ ENV DEBIAN_FRONTEND=noninteractive
 # sudo を含む最低限のパッケージ
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-    sudo zsh\
+    sudo zsh wget curl ca-certificates\
+    # Playwright/Chromiumの動作・GUIに必要な依存
+    xvfb x11vnc fluxbox supervisor \
+    libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2 \
+    libxshmfence1 libxrandr2 libxdamage1 libxcomposite1 libxext6 libxfixes3 libxrender1 libxtst6 libgl1 \
+    fonts-liberation libappindicator3-1 libcups2 lsb-release xdg-utils \
+
     && rm -rf /var/lib/apt/lists/*
+
+# novnc, websockifyを取得
+RUN mkdir -p /opt/novnc /opt/websockify \
+    && wget -qO- https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz | tar xz -C /opt/novnc --strip-components=1 \
+    && wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.gz | tar xz -C /opt/websockify --strip-components=1
 
 # デフォルトユーザー作成
 RUN groupadd --gid ${USER_GID} ${USERNAME} \
@@ -29,10 +40,14 @@ RUN mkdir -p /workspace/project \
 # Python 依存関係のインストール
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir -r /tmp/requirements.txt
+ && pip install --no-cache-dir -r /tmp/requirements.txt \
+ && playwright install --with-deps
 
-# 非 root ユーザーに切り替え
+
+# supervisor設定
+COPY .devcontainer/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
 USER ${USERNAME}
 
-# VS Code アタッチ時に即終了しないように
-CMD ["sleep", "infinity"]
+# supervisor起動（Xvfb+fluxbox+x11vnc+novnc）
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

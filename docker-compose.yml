@@ -14,11 +14,13 @@ services:
     env_file:
       - ./.env
     working_dir: /workspace/project
-    command: sleep infinity
     depends_on:
       - db
     networks:
       - metanet1
+    ports:
+      - "6080:6080"  # noVNCのポートをホストと共有
+    command: "" # supervisorをDockerfileで起動するので空
 
   db:
     image: postgres:latest
