@@ -212,3 +212,29 @@ ruff
 psycopg2-binary
 requests
 pandas
+
+
+
+
+
+---
+
+
+# postgres 関連
+
+dbt + postgresql で データ分析基盤の構築をしていきたい。
+現在のプロジェクトファイルの構成は以下のようになっています。
+
+- project_root/
+  - .devcontianer/
+  - dbt_project
+  - ingestion/ csv ファイルの取り込み等
+  - raw_data/
+    - spotify/
+      - spotify1.csv
+      - spotify2.csv
+      :
+
+
+ここで、一つのテーブルが複数の csv ファイルになっているため、これを統合して postgresql に取り込みたい。
+どの様に python を書けばよいでしょうか？
