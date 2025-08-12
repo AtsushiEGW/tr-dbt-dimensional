@@ -1,0 +1,31 @@
+import re
+from playwright.sync_api import Playwright, sync_playwright, expect
+
+
+def run(playwright: Playwright) -> None:
+    browser = playwright.chromium.launch(headless=False)
+    context = browser.new_context()
+    page = context.new_page()
+    page.goto("https://qiita.com/")
+    page.get_by_role("link", name="Sign up").first.click()
+    page.get_by_role("link", name="Login").nth(1).click()
+    page.get_by_role("textbox", name="Username or Email").click()
+    page.get_by_role("textbox", name="Username or Email").fill("ewa")
+    page.get_by_role("textbox", name="Username or Email").click()
+    page.get_by_role("textbox", name="Username or Email").fill("e")
+    page.get_by_role("textbox", name="Username or Email").click()
+    page.get_by_role("textbox", name="Username or Email").fill("egwats@gmail.com")
+    page.get_by_role("textbox", name="Password").click()
+    page.get_by_role("textbox", name="Password").fill("testtesttest")
+    page.get_by_role("textbox", name="Password").press("Enter")
+    page.get_by_role("button", name="Log in to Qiita").click()
+    page.locator("div").filter(has_text="Log in to QiitaLog in with").nth(2).click()
+    page.close()
+
+    # ---------------------
+    context.close()
+    browser.close()
+
+
+with sync_playwright() as playwright:
+    run(playwright)

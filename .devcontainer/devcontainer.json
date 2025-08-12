@@ -4,6 +4,11 @@
   "service": "app",
   "workspaceFolder": "/workspace/project",
   "shutdownAction": "stopCompose",
+  
+  "overrideCommand": false,
+  "containerEnv": {
+    "DISPLAY": ":99"
+  },
 
   "features":{
     "ghcr.io/devcontainers/features/common-utils:2": {

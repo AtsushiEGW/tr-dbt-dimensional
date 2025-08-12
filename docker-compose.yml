@@ -20,7 +20,6 @@ services:
       - metanet1
     ports:
       - "6080:6080"  # noVNCのポートをホストと共有
-    command: "" # supervisorをDockerfileで起動するので空
 
   db:
     image: postgres:latest
