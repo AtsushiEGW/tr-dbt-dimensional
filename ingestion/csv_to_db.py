@@ -88,4 +88,10 @@ def truncate_table(cur, schema: str, table: str):
     cur.execute(sql.SQL("TRUNCATE TABLE {}.{}").format(sql.Identifier(schema), sql.Identifier(table)))
 
 
+def copy_csv_into_table(
+        cur,
+        schema: str,
+        table: str,
+        csv_path: Path,
+)
 
