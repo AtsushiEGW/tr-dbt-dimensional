@@ -7,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+    build-essential \
     sudo zsh wget curl ca-certificates \
     xvfb x11vnc fluxbox supervisor \
     libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2 \
