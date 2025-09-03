@@ -1,15 +1,11 @@
-version: '3.8'
 services:
   app:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    # ホストのUID/GIDをマウント時に合わせる（.envまたはシェル環境でLOCAL_UID/LOCAL_GIDを定義）
-    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    # VS Code Dev Containers から attach するメインサービス
     volumes:
-      # プロジェクトルート全体をコンテナの /workspace/project にマウント
       - ./:/workspace/project:cached
-      # dbt 等が参照する .env ファイル
       - ./.env:/workspace/project/.env:ro
     env_file:
       - ./.env
@@ -19,44 +15,39 @@ services:
     networks:
       - metanet1
     ports:
-      - "6080:6080"  # noVNCのポートをホストと共有
+      - "6080:6080"   # noVNC
+    environment:
+      - DISPLAY=:99
+    shm_size: "2gb"   # ヘッドフル時の安定化
 
   db:
     image: postgres:latest
-    container_name: postgres
-    hostname: postgres
+    # container_name: postgres  # 衝突しやすいので省略推奨
     restart: always
     env_file:
       - ./.env
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "55432:5432"  # ホスト既存の 5432 と競合を避ける
     networks:
       - metanet1
 
   metabase:
     image: metabase/metabase:latest
-    container_name: metabase
+    # container_name: metabase
     hostname: metabase
     restart: always
     depends_on:
       - db
     environment:
       - MB_DB_TYPE=postgres
-      - MB_DB_DBNAME=${POSTGRES_DB:-metabase}
-      - MB_DB_HOST=postgres
-      - MB_DB_PORT=${POSTGRES_PORT:-5432}
-      - MB_DB_USER=${POSTGRES_USER:-postgres}
-      - MB_DB_PASS=${POSTGRES_PASSWORD:-postgres}
-    volumes:
-      # javaのエントロピー供給のためにホストの /dev/urandom をマウント
-      - /dev/urandom:/dev/random:ro
-    healthcheck:
-      test: ["CMD-SHELL", "curl --fail -I http://localhost:3000/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      - MB_DB_DBNAME=${POSTGRES_DB}
+      - MB_DB_HOST=db
+      - MB_DB_PORT=${POSTGRES_PORT}
+      - MB_DB_USER=${POSTGRES_USER}
+      - MB_DB_PASS=${POSTGRES_PASSWORD}
+    # healthcheck は curl 未導入のため一旦なし。必要なら busybox/curl を別途導入して再有効化。
     networks:
       - metanet1
     ports:

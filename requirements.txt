@@ -1,3 +1,4 @@
+
 dbt-core
 sqlfluff
 sqlfluff-templater-dbt
@@ -7,4 +8,4 @@ ruff
 psycopg2-binary
 requests
 pandas
-playwright
+# playwright

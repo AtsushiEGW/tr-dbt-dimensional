@@ -1,49 +1,44 @@
-FROM python:3.12-slim
+# Playwright 公式イメージ（Ubuntu 22.04 / jammy）
+FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 
-ARG USERNAME=dev
-ARG USER_UID=1000
-ARG USER_GID=1000
 ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-    build-essential \
-    sudo zsh wget curl ca-certificates \
-    xvfb x11vnc fluxbox supervisor \
-    libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2 \
-    libxshmfence1 libxrandr2 libxdamage1 libxcomposite1 libxext6 libxfixes3 libxrender1 libxtst6 libgl1 \
-    fonts-liberation libappindicator3-1 libcups2 lsb-release xdg-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /opt/novnc /opt/websockify \
-    && wget -qO- https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz | tar xz -C /opt/novnc --strip-components=1 \
-    && wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.gz | tar xz -C /opt/websockify --strip-components=1
-
-RUN groupadd --gid ${USER_GID} ${USERNAME} \
- && useradd --create-home --shell /bin/bash --uid ${USER_UID} --gid ${USER_GID} ${USERNAME} \
- && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
- && chmod 0440 /etc/sudoers.d/${USERNAME}
-
+ENV DISPLAY=:99
 WORKDIR /workspace/project
 
-RUN mkdir -p /workspace/project \
-    && chown -R ${USER_UID}:${USER_GID} /workspace
+# root で GUI/VNC 周りとユーティリティを導入
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        xvfb x11vnc fluxbox supervisor \
+        wget curl ca-certificates \
+        fonts-noto-cjk fonts-noto-color-emoji \
+        zsh \
+    && chsh -s /usr/bin/zsh pwuser \
+    && rm -rf /var/lib/apt/lists/*
 
-# --- ここまでは root ---
+# noVNC と websockify(静的配信用) を配置
+RUN mkdir -p /opt/novnc /opt/websockify \
+    && wget -qO- https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz | tar xz -C /opt/novnc --strip-components=1
 
+# Python パッケージ（requirements）と websockify(Python版) を導入
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir -r /tmp/requirements.txt \
- && pip install --no-cache-dir websockify
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir websockify
 
-# Playwright のブラウザは dev ユーザーのキャッシュに入れる
-USER ${USERNAME}
-ENV DISPLAY=:99
-RUN playwright install --with-deps
-
-# supervisor設定は root のままでも dev のままでもOK（このままで動きます）
-USER root
+# supervisor 設定
 COPY .devcontainer/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-USER ${USERNAME}
+# 作業フォルダ作成と権限
+RUN mkdir -p /workspace/project \
+    && chown -R 1001:1001 /workspace
+
+# 以降は Playwright 既定ユーザー（pwuser, uid=1001）で動かす
+USER pwuser
+
+# Playwright 公式イメージはブラウザ同梱のため install 不要。
+# ただし将来別ブラウザを増やしたい場合は（必要時のみ）:
+# RUN playwright install chromium
+
 CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

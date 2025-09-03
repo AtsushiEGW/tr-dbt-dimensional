@@ -1,0 +1,202 @@
+現在のプロジェクトの主なフォルダ構成とファイルの中身は以下となっています
+
+====== folder 構造 =====
+- project_dir/
+    - .devcontainer/
+          - devcontainer.json
+          - Dockerfile
+          - supervisord.conf
+    - my_project/
+    - docker-compose.yml
+    - .env
+    - requirements.txt
+
+====== .devcontainer/devcontainer.json ======
+{
+  "name": "dimensional modeling container (playwright-official)",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "app",
+  "workspaceFolder": "/workspace/project",
+  "shutdownAction": "stopCompose",
+
+  "overrideCommand": false,
+
+  "forwardPorts": [55432, 3000, 6080],
+  "remoteUser": "pwuser",
+
+  "mounts": [
+    "source=${localEnv:HOME}/.dotfiles,target=/home/pwuser/.dotfiles,type=bind,consistency=cached,readonly"
+  ],
+  "postStartCommand": "bash -lc '~/.dotfiles/bootstrap.sh || true'",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-keymap",
+        "ms-toolsai.jupyter-renderers",
+        "ms-toolsai.vscode-jupyter-cell-tags"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.analysis.typeCheckingMode": "basic",
+        "python.analysis.autoSearchPaths": true,
+        "python.analysis.useLibraryCodeForTypes": true,
+        "python.formatting.provider": "black",
+        "editor.formatOnSave": true,
+        "terminal.integrated.shell.linux": "/bin/zsh"
+      }
+    }
+  }
+}
+====== .devcontainer/Dockerfile ======
+# Playwright 公式イメージ（Ubuntu 22.04 / jammy）
+FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:99
+WORKDIR /workspace/project
+
+# root で GUI/VNC 周りとユーティリティを導入
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        xvfb x11vnc fluxbox supervisor \
+        wget curl ca-certificates \
+        fonts-noto-cjk fonts-noto-color-emoji \
+        zsh \
+    && chsh -s /bin/zsh pwuser \
+    && rm -rf /var/lib/apt/lists/*
+
+# noVNC と websockify(静的配信用) を配置
+RUN mkdir -p /opt/novnc /opt/websockify \
+    && wget -qO- https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz | tar xz -C /opt/novnc --strip-components=1
+
+# Python パッケージ（requirements）と websockify(Python版) を導入
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir websockify
+
+# supervisor 設定
+COPY .devcontainer/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# 作業フォルダ作成と権限
+RUN mkdir -p /workspace/project \
+    && chown -R 1001:1001 /workspace
+
+# 以降は Playwright 既定ユーザー（pwuser, uid=1001）で動かす
+USER pwuser
+
+# Playwright 公式イメージはブラウザ同梱のため install 不要。
+# ただし将来別ブラウザを増やしたい場合は（必要時のみ）:
+# RUN playwright install chromium
+
+CMD ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+====== .devcontainer/supervisord.conf ======
+[supervisord]
+nodaemon=true
+logfile=/tmp/supervisord.log
+pidfile=/tmp/supervisord.pid
+
+[program:xvfb]
+command=/usr/bin/Xvfb :99 -screen 0 1920x1080x24
+autostart=true
+autorestart=true
+priority=1
+
+[program:fluxbox]
+command=fluxbox
+autostart=true
+autorestart=true
+priority=2
+environment=DISPLAY=:99
+
+[program:x11vnc]
+command=x11vnc -forever -create -display :99 -shared -rfbport 5900 -nopw
+autostart=true
+autorestart=true
+priority=3
+
+[program:novnc]
+command=/usr/local/bin/websockify --web=/opt/novnc 0.0.0.0:6080 localhost:5900
+autostart=true
+autorestart=true
+priority=4
+====== docker-compsoe.ym ======
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    # VS Code Dev Containers から attach するメインサービス
+    volumes:
+      - ./:/workspace/project:cached
+      - ./.env:/workspace/project/.env:ro
+    env_file:
+      - ./.env
+    working_dir: /workspace/project
+    depends_on:
+      - db
+    networks:
+      - metanet1
+    ports:
+      - "6080:6080"   # noVNC
+    environment:
+      - DISPLAY=:99
+    shm_size: "2gb"   # ヘッドフル時の安定化
+
+  db:
+    image: postgres:latest
+    # container_name: postgres  # 衝突しやすいので省略推奨
+    restart: always
+    env_file:
+      - ./.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "55432:5432"  # ホスト既存の 5432 と競合を避ける
+    networks:
+      - metanet1
+
+  metabase:
+    image: metabase/metabase:latest
+    # container_name: metabase
+    hostname: metabase
+    restart: always
+    depends_on:
+      - db
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=${POSTGRES_DB:-metabase}
+      - MB_DB_HOST=db
+      - MB_DB_PORT=${POSTGRES_PORT:-5432}
+      - MB_DB_USER=${POSTGRES_USER:-postgres}
+      - MB_DB_PASS=${POSTGRES_PASSWORD:-postgres}
+    # healthcheck は curl 未導入のため一旦なし。必要なら busybox/curl を別途導入して再有効化。
+    networks:
+      - metanet1
+    ports:
+      - "3000:3000"
+
+networks:
+  metanet1:
+    driver: bridge
+
+volumes:
+  pgdata:
+====== requirements.txt ======
+
+dbt-core
+sqlfluff
+sqlfluff-templater-dbt
+dbt-postgres
+python-dotenv
+ruff
+psycopg2-binary
+requests
+pandas
+playwright

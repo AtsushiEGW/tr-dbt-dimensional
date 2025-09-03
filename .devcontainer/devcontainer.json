@@ -1,30 +1,19 @@
 {
-  "name": "dimensional modeling container",
+  "name": "dimensional modeling container (playwright-official)",
   "dockerComposeFile": ["../docker-compose.yml"],
   "service": "app",
   "workspaceFolder": "/workspace/project",
   "shutdownAction": "stopCompose",
-  
+
   "overrideCommand": false,
-  "containerEnv": {
-    "DISPLAY": ":99"
-  },
 
-  "features":{
-    "ghcr.io/devcontainers/features/common-utils:2": {
-      "installZsh": true,
-      "configureZshAsDefaultShell": true,
-      "zshTheme": "agnoster",
-      "installOhMyZsh": true,
-      "installOhMyZshConfig": true,
-      "ohMyZshPlugins": "git zsh-autosuggestions zsh-syntax-highlighting",
-      "upgradePackages": true
-    }
-  },
+  "forwardPorts": [55432, 3000, 6080],
+  "remoteUser": "pwuser",
 
-  // VS Code ポートフォワード
-  "forwardPorts": [5432, 3000],
-  "remoteUser": "dev",
+  "mounts": [
+    "source=${localEnv:HOME}/.dotfiles,target=/home/pwuser/.dotfiles,type=bind,consistency=cached,readonly"
+  ],
+  "postStartCommand": "bash -lc '~/.dotfiles/bootstrap.sh || true'",
 
   "customizations": {
     "vscode": {
@@ -43,7 +32,12 @@
         "python.analysis.useLibraryCodeForTypes": true,
         "python.formatting.provider": "black",
         "editor.formatOnSave": true,
-        "terminal.integrated.shell.linux": "/bin/zsh"
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+            "zsh": {
+                "path": "/usr/bin/zsh"
+            }
+        },
       }
     }
   }
