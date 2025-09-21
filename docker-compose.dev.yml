@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        USER_UID: ${LOCAL_UID:-1000}
+        USER_GID: ${LOCAL_GID:-1000}
+        ENABLE_GUI: "true"
+        NOVNC_PASSWORD: ${NOVNC_PASSWORD}   # ← .env から build arg で注入
+    env_file:
+      - .env
+    volumes:
+      - ./:/workspace/project:cached
+    expose:
+      - "6080"   # 外部公開はせず、devcontainer の port forward 経由で利用
+    environment:
+      - DISPLAY=:99
+    command: ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+
+  db:
+    ports:
+      - "5432:5432"
+
+  metabase:
+    ports:
+      - "3000:3000"

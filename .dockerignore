@@ -1,0 +1,10 @@
+.git
+docker-compose*.yml
+pgdata
+__pycache__/
+*.pyc
+.env
+.env.*
+.output/
+dist/
+node_modules/

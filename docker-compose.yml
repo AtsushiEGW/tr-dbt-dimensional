@@ -1,16 +1,12 @@
-version: '3.8'
 services:
   app:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    # ホストのUID/GIDをマウント時に合わせる（.envまたはシェル環境でLOCAL_UID/LOCAL_GIDを定義）
-    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
-    volumes:
-      # プロジェクトルート全体をコンテナの /workspace/project にマウント
-      - ./:/workspace/project:cached
-      # dbt 等が参照する .env ファイル
-      - ./.env:/workspace/project/.env:ro
+      args:
+        USER_UID: ${LOCAL_UID:-1000}
+        USER_GID: ${LOCAL_GID:-1000}
+        ENABLE_GUI: "false"   # 本番はGUIなし
     env_file:
       - ./.env
     working_dir: /workspace/project
@@ -18,45 +14,40 @@ services:
       - db
     networks:
       - metanet1
-    ports:
-      - "6080:6080"  # noVNCのポートをホストと共有
+    # 本番は bind mount なし（イミュータブル）
 
   db:
-    image: postgres:latest
-    container_name: postgres
-    hostname: postgres
+    image: postgres:16
     restart: always
     env_file:
       - ./.env
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # 本番はFW/リバプロで制御するなら ports を外してもOK
     ports:
       - "5432:5432"
     networks:
       - metanet1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} -h 127.0.0.1 -p ${POSTGRES_PORT:-5432}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 
   metabase:
     image: metabase/metabase:latest
-    container_name: metabase
-    hostname: metabase
     restart: always
     depends_on:
-      - db
+      db:
+        condition: service_healthy # db が healthy になるまで待つ
     environment:
-      - MB_DB_TYPE=postgres
-      - MB_DB_DBNAME=${POSTGRES_DB:-metabase}
-      - MB_DB_HOST=postgres
-      - MB_DB_PORT=${POSTGRES_PORT:-5432}
-      - MB_DB_USER=${POSTGRES_USER:-postgres}
-      - MB_DB_PASS=${POSTGRES_PASSWORD:-postgres}
-    volumes:
-      # javaのエントロピー供給のためにホストの /dev/urandom をマウント
-      - /dev/urandom:/dev/random:ro
-    healthcheck:
-      test: ["CMD-SHELL", "curl --fail -I http://localhost:3000/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: ${POSTGRES_DB:-metabase_appdb}
+      MB_DB_HOST: db
+      MB_DB_PORT: ${POSTGRES_PORT:-5432}
+      MB_DB_USER: ${POSTGRES_USER:-metabase_user}
+      MB_DB_PASS: ${POSTGRES_PASSWORD:-change_me}
     networks:
       - metanet1
     ports:

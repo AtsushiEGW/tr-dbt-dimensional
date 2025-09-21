@@ -1,16 +1,15 @@
 {
   "name": "dimensional modeling container",
-  "dockerComposeFile": ["../docker-compose.yml"],
+  "dockerComposeFile": [
+    "../docker-compose.yml",
+    "../docker-compose.dev.yml"
+  ],
   "service": "app",
   "workspaceFolder": "/workspace/project",
   "shutdownAction": "stopCompose",
-  
   "overrideCommand": false,
-  "containerEnv": {
-    "DISPLAY": ":99"
-  },
 
-  "features":{
+  "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": true,
       "configureZshAsDefaultShell": true,
@@ -22,8 +21,12 @@
     }
   },
 
-  // VS Code ポートフォワード
-  "forwardPorts": [5432, 3000],
+  "mounts": [
+    "source=${localEnv:HOME}/.dotfiles,target=/home/dev/.dotfiles,type=bind,consistency=cached,readonly"
+  ],
+  "postCreateCommand": "bash -lc 'chmod +x /home/dev/.dotfiles/bootstrap.sh || true; DOTFILES=/home/dev/.dotfiles /home/dev/.dotfiles/bootstrap.sh || ture'",
+
+  "forwardPorts": [5432, 3000, 6080],
   "remoteUser": "dev",
 
   "customizations": {
@@ -43,7 +46,7 @@
         "python.analysis.useLibraryCodeForTypes": true,
         "python.formatting.provider": "black",
         "editor.formatOnSave": true,
-        "terminal.integrated.shell.linux": "/bin/zsh"
+        "terminal.integrated.defaultProfile.linux": "zsh"
       }
     }
   }

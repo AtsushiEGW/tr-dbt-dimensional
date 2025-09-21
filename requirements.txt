@@ -7,4 +7,7 @@ ruff
 psycopg2-binary
 requests
 pandas
+pyarrow
+pyyaml
 playwright
+sqlalchemy

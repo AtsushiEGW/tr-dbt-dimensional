@@ -1,0 +1,4 @@
+{
+    "ruff.configuration": "${workspaceFolder}/pyproject.toml"
+
+}
