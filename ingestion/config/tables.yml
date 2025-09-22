@@ -1,0 +1,26 @@
+tables:
+  links:
+    folder: "links"
+    filename_glob: "links_*.csv"
+    target_table: "links"
+    primary_key: ["movieId"]
+
+  movies:
+    folder: "movies"
+    filename_glob: "movies_*.csv"
+    target_table: "movies"
+    primary_key: ["movieId"]
+
+  ratings:
+    folder: "ratings"
+    filename_glob: "ratings_*.csv"
+    target_table: "ratings"
+    primary_key: ["userId", "movieId"]
+
+  tags:
+    folder: "tags"
+    filename_glob: "tags_*.csv"
+    target_table: "tags"
+    primary_key: ["userId", "movieId", "timestamp"]
+    
+    ## primary_key は後で確認する

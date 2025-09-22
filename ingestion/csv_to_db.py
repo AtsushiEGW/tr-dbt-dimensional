@@ -1,361 +1,365 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-csv_to_db.py (UPSERT対応版 / Python 3.12+)
-- data/<table_name>/*.csv(,*.csv.gz) を低メモリでPostgreSQLへロード
-- 2モード:
-  1) append（既定）: 既存を消さずに追記
-  2) upsert         : 自然キー(--pk)を基に、既存は上書き・新規は追加
-- rawスキーマ想定（全列TEXTで安全に着地し、型付けはdbt側で行う前提）
-- 依存: psycopg2
-"""
-
+import csv
 import argparse
-import gzip
+import io
+import shutil
+import sys
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
+import pandas as pd
 import os
 from pathlib import Path
+import yaml
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+from typing import Dict, List, Tuple
+from utils import (
+    get_engine, ensure_schema, get_paths, get_retention_days, today_stamp,
+    table_exists, get_table_columns, create_text_table, add_missing_text_columns
+)
 
-import psycopg2
-from psycopg2 import sql
 
 
-# ----------------------------
-# 引数
-# ----------------------------
-def parse_args():
+
+# -------------------------------------------------
+# Paths / Config
+# -------------------------------------------------
+HERE: Path = Path(__file__).parent
+CFG_PATH: Path = HERE / "config" / "tables.yml"
+TARGET_SCHEMA = os.getenv("TARGET_SCHEMA", "raw")
+PATHS = get_paths() # dict[str, Path] を想定
+
+
+# -------------------------------------------------
+# ヘルパー：設定 & ファイル列挙
+# -------------------------------------------------
+def load_config() -> dict:
+    with CFG_PATH.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f)["tables"]
+
+
+def _iter_csv_files(folder_root: Path, folder: str, pattern: str) -> list[Path]:
+    """folder_root/folder 配下で pattern (ex. "links_*.csv") にマッチする CSV をファイル名の昇順で返す"""
+    base = folder_root / folder
+    if not base.exists():
+        print(f"[warn] base folder not found: {base}")
+    files = sorted(base.rglob(pattern), key=lambda p: str(p))
+    return files
+
+# -------------------------------------------------
+# ヘッダ正規化（重複列対応）
+# -------------------------------------------------
+def _read_raw_header(path: Path, encoding: str | None = None) -> list[str]:
+    """CSVのheaderだけを標準csvで読む。高速&pandas非依存"""
+    with path.open("r", encoding=encoding or "utf-8", newline="") as f:
+        reader = csv.reader(f)
+        return next(reader, [])
+
+
+def _plan_normalized_headers(files: list[Path]) -> tuple[list[str], dict[Path, list[str]], dict[str, int]] :
     """
-    コマンドライン引数を解析。
-    - --mode: append (既定) / upsert
-    - --pk:   upsert時の一意性キー列（カンマ区切り; 複合可）
-    - --create: テーブル未存在時に最初のCSVのヘッダーからTEXTで作成
-    - --truncate: ロード前に既存データ削除（append時のみ実用的）
-    """
-    p = argparse.ArgumentParser(description="Load multiple CSVs into Postgres efficiently (append / upsert).")
-    p.add_argument("--data-root", default="data", help="データのルートディレクトリ（例: data）")
-    p.add_argument("--table", required=True, help="テーブル名（例: tablename）")
-    p.add_argument("--schema", default="raw", help="スキーマ名（既定: raw）")
-    p.add_argument("--host", default=os.getenv("POSTGRES_HOST", "localhost"))
-    p.add_argument("--port", type=int, default=int(os.getenv("POSTGRES_PORT", "5432")))
-    p.add_argument("--user", default=os.getenv("POSTGRES_USER", "postgres"))
-    p.add_argument("--password", default=os.getenv("POSTGRES_PASSWORD", "postgres"))
-    p.add_argument("--dbname", default=os.getenv("POSTGRES_DB", "postgres"))
-    p.add_argument("--encoding", default="utf-8", help="CSVファイルのエンコーディング（既定: utf-8）")
-    p.add_argument("--delimiter", default=",", help="CSVの区切り文字（既定: ,）")
-    p.add_argument("--quotechar", default='"', help='CSVの引用符（既定: "）')
-    p.add_argument("--truncate", action="store_true", help="ロード前にテーブルを空にする（append運用時に有用）")
-    p.add_argument("--create", action="store_true", help="テーブルが無ければ作成（最初のCSVヘッダーからTEXTで定義）")
-    p.add_argument("--mode", choices=["append", "upsert"], default="append", help="追記 or UPSERT（既定: append）")
-    p.add_argument("--pk", default="", help="upsert時の一意キー列。カンマ区切りで複数可（例: id / store_id,order_date）")
-    return p.parse_args()
-
-
-# ----------------------------
-# 接続
-# ----------------------------
-def connect(args):
-    """
-    PostgreSQLへ接続（autocommit=False）
-    """
-    conn = psycopg2.connect(
-        host=args.host,
-        port=args.port,
-        user=args.user,
-        password=args.password,
-        dbname=args.dbname,
-    )
-    conn.autocommit = False
-    return conn
-
-
-# ----------------------------
-# ファイルユーティリティ
-# ----------------------------
-def list_csv_files(data_dir: Path) -> list[Path]:
-    """
-    対象ディレクトリ内の .csv と .csv.gz をソートして列挙。
-    """
-    return sorted([*data_dir.glob("*.csv"), *data_dir.glob("*.csv.gz")])
-
-
-def read_header(path: Path, encoding: str) -> list[str]:
-    """
-    先頭行(ヘッダー)だけを読み、列名リストとして返す。
-    """
-    opener = gzip.open if path.suffix == ".gz" else open
-    mode = "rt"
-    with opener(path, mode, encoding=encoding, newline="") as f:
-        header_line = f.readline().rstrip("\n\r")
-    return header_line.split(",")
-
-
-def validate_headers_consistent(files: list[Path], encoding: str) -> list[str]:
-    """
-    全CSVでヘッダー一致を検証（列名・順序）。不一致なら中止。
+    すべてのCSVのヘッダを見て、同名列の"最大多重度"を求め、
+    各ファイルのヘッダを name_1, name_2, ... に正規化する計画を作る
+    
+    return:
+        union_cols: 全ファイルでの正規化後カラムの和集合(順序は最初のファイル優先、以後は末尾追加)
+        per_file_cols : 各ファイルの正規化後カラム名リスト
+        max_dup_count: {ベース名: 最大多重度}
     """
     if not files:
-        raise ValueError("CSVファイルが見つかりません。")
-    base = read_header(files[0], encoding)
-    for p in files[1:]:
-        h = read_header(p, encoding)
-        if h != base:
-            raise ValueError(
-                f"ヘッダー不一致: {files[0].name} と {p.name} で列が異なります。\n{files[0].name}: {base}\n{p.name}: {h}"
-            )
-    return base
+        return [], {}, {}
+
+    # 1) 各ファイルへのraw header
+    raw_by_file: dict[Path, list[str]] = {f: _read_raw_header(f) for f in files}
+    
+
+# --------------------
+# ここから下理解していない
 
 
-# ----------------------------
-# スキーマ/テーブル管理
-# ----------------------------
-def ensure_schema(cur, schema: str):
+    # 2) 列ごとの最大多重度
+    max_dup_count: dict[str, int] = defaultdict(int)
+    for cols in raw_by_file.values():
+        cnt = Counter(cols)
+        for name, n in cnt.items():
+            if n > max_dup_count[name]:
+                max_dup_count[name] = n
+
+    # 3) 正規化（シリーズ化）
+    def normalize(cols: list[str]) -> list[str]:
+        seen_idx: dict[str, int] = defaultdict(int)
+        out: list[str] = []
+        for name in cols:
+            seen_idx[name] += 1
+            k = seen_idx[name]
+            if max_dup_count[name] > 1:
+                out.append(f"{name}_{k}")  # 多重度>1なら系列化
+            else:
+                out.append(name)          # 単独はそのまま
+        return out
+
+    per_file_cols: dict[Path, list[str]] = {f: normalize(raw_by_file[f]) for f in files}
+
+    # 4) 正規化後の和集合（順序は最初を基準に、新規は末尾）
+    first = per_file_cols[files[0]]
+    union_cols: list[str] = first[:]
+    seen = set(union_cols)
+    for f in files[1:]:
+        for c in per_file_cols[f]:
+            if c not in seen:
+                seen.add(c)
+                union_cols.append(c)
+
+    return union_cols, per_file_cols, dict(max_dup_count)
+
+# 互換のためのラッパ（既存名）
+def _union_csv_headers(files: list[Path]) -> tuple[list[str], dict[Path, list[str]], dict[str, int]]:
+    return _plan_normalized_headers(files)
+
+# -------------------------------------------------
+# 一時テーブル & COPY
+# -------------------------------------------------
+def _make_temp_text_table(engine: Engine, columns: list[str]) -> str:
+    temp_name = f"stg_{int(datetime.now().timestamp())}_{os.getpid()}"
+    temp_fqtn = f"pg_temp.{temp_name}"
+    cols_sql = ", ".join([f'"{c}" TEXT' for c in columns])
+    with engine.begin() as conn:
+        conn.execute(text(f'CREATE TEMP TABLE {temp_fqtn} ({cols_sql});'))
+    return temp_fqtn
+
+def _copy_df_to_table(engine: Engine, df: pd.DataFrame, table_fqtn: str, columns: list[str]):
     """
-    スキーマ作成（存在すれば何もしない）。
+    DataFrame -> COPY FROM STDIN (CSV)。
+    欠損は空文字にしてCSV化し、COPY側の NULL '' により本物のNULLへ。
     """
-    cur.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
-
-
-def table_exists(cur, schema: str, table: str) -> bool:
-    """
-    テーブル存在確認。
-    """
-    cur.execute(
-        """
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = %s AND table_name = %s
-        """,
-        (schema, table),
-    )
-    return cur.fetchone() is not None
-
-
-def create_table_text_columns(cur, schema: str, table: str, columns: list[str]):
-    """
-    全列 TEXT でテーブル作成。列名はヘッダーをそのまま採用。
-    """
-    identifiers = [sql.Identifier(c) for c in columns]
-    text_cols = [sql.SQL("{} TEXT").format(col) for col in identifiers]
-    query = sql.SQL(
-        "CREATE TABLE {}.{} ({})"
-        ).format(
-            sql.Identifier(schema),
-            sql.Identifier(table),
-            sql.SQL(", ").join(text_cols),
-        )
-    cur.execute(query)
-
-
-def truncate_table(cur, schema: str, table: str):
-    """
-    データ全削除（構造は維持）。
-    """
-    cur.execute(sql.SQL("TRUNCATE TABLE {}.{}").format(sql.Identifier(schema), sql.Identifier(table)))
-
-
-def ensure_unique_constraint(cur, schema: str, table: str, pk_cols: list[str]):
-    if not pk_cols:
-        raise ValueError("--pk を指定してください")
-
-    # 既に同じ列集合の一意制約/PKがあるかを確認
-    cur.execute("""
-        SELECT array_agg(a.attname ORDER BY a.attname) AS cols
-        FROM pg_index i
-        JOIN pg_class t   ON i.indrelid = t.oid
-        JOIN pg_namespace n ON n.oid = t.relnamespace
-        JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
-        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-        WHERE n.nspname = %s AND t.relname = %s AND i.indisunique
-        GROUP BY i.indexrelid
-    """, (schema, table))
-    unique_sets = {tuple(sorted(row[0])) for row in cur.fetchall()}
-
-    if tuple(sorted(pk_cols)) in unique_sets:
-        return  # 既に同じ列集合のユニークインデックス/制約がある
-
-    # ない場合は追加
-    constraint_name = f"{table}_ux"
-    col_idents = [sql.Identifier(c) for c in pk_cols]
-    q = sql.SQL(
-        "ALTER TABLE {}.{} ADD CONSTRAINT {} UNIQUE ({})"
-    ).format(
-        sql.Identifier(schema),
-        sql.Identifier(table),
-        sql.Identifier(constraint_name),
-        sql.SQL(", ").join(col_idents),
-    )
-    cur.execute(q)
-
-# ----------------------------
-# COPY ロード（append / upsert）
-# ----------------------------
-def copy_into_target_append(cur, schema: str, table: str, csv_path: Path, delimiter: str, quotechar: str, encoding: str):
-    """
-    appendモード: CSVをそのままターゲットにCOPY（HEADER付き）。
-    """
-    opener = gzip.open if csv_path.suffix == ".gz" else open
-    with opener(csv_path, "rt", encoding=encoding, newline="") as f:
-        copy_sql = sql.SQL(
-            "COPY {}.{} FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER %s, QUOTE %s)"
-        ).format(sql.Identifier(schema), sql.Identifier(table))
-        cur.copy_expert(cur.mogrify(copy_sql.as_string(cur), (delimiter, quotechar)).decode(), f)
-
-
-def create_temp_table(cur, temp_name: str, columns: list[str]):
-    """
-    UPSERT用: セッションローカルの一時テーブルを作成（全列TEXT）。
-    - 先に DROP TABLE IF EXISTS で掃除
-    - Composed に .format() しないよう一発 format で安全に生成
-    - トランザクション終了時に自動削除（ON COMMIT DROP）
-    """
-    # 既存があれば削除
-    drop_q = sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(temp_name))
-    cur.execute(drop_q)
-
-    # CREATE TEMP TABLE ... (col1 TEXT, col2 TEXT, ...) ON COMMIT DROP
-    idents = [sql.Identifier(c) for c in columns]
-    text_cols = [sql.SQL("{} TEXT").format(c) for c in idents]
-    create_q = sql.SQL(
-        "CREATE TEMP TABLE {} ({}) ON COMMIT DROP"
-    ).format(
-        sql.Identifier(temp_name),
-        sql.SQL(", ").join(text_cols),
-    )
-    cur.execute(create_q)
-
-
-def copy_into_temp(cur, temp_name: str, csv_path: Path, delimiter: str, quotechar: str, encoding: str):
-    """
-    UPSERT用: CSVを一時テーブルへCOPY（HEADER付き）。
-    """
-    opener = gzip.open if csv_path.suffix == ".gz" else open
-    with opener(csv_path, "rt", encoding=encoding, newline="") as f:
-        copy_sql = sql.SQL(
-            "COPY {} FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER %s, QUOTE %s)"
-        ).format(sql.Identifier(temp_name))
-        cur.copy_expert(cur.mogrify(copy_sql.as_string(cur), (delimiter, quotechar)).decode(), f)
-
-
-def upsert_from_temp(cur, schema: str, table: str, temp_name: str, columns: list[str], pk_cols: list[str]):
-    """
-    一時テーブルからターゲットへUPSERT。
-    - ON CONFLICT (pk_cols...) DO UPDATE SET 非PK列=EXCLUDED.非PK列
-    """
-    col_idents = [sql.Identifier(c) for c in columns]
-    pk_idents  = [sql.Identifier(c) for c in pk_cols]
-
-    non_pk_cols = [c for c in columns if c not in pk_cols]
-    set_pairs = [
-        sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c)) for c in non_pk_cols
-    ]
-
-    col_list    = sql.SQL(", ").join(col_idents)
-    select_list = sql.SQL(", ").join(sql.Identifier(c) for c in columns)
-    pk_list     = sql.SQL(", ").join(pk_idents)
-
-    if set_pairs:
-        set_list = sql.SQL(", ").join(set_pairs)
-        q = sql.SQL(
-            "INSERT INTO {}.{} ({}) "
-            "SELECT {} FROM {} "
-            "ON CONFLICT ({}) DO UPDATE SET {}"
-        ).format(
-            sql.Identifier(schema),
-            sql.Identifier(table),
-            col_list,
-            select_list,
-            sql.Identifier(temp_name),
-            pk_list,
-            set_list,
-        )
-    else:
-        q = sql.SQL(
-            "INSERT INTO {}.{} ({}) "
-            "SELECT {} FROM {} "
-            "ON CONFLICT ({}) DO NOTHING"
-        ).format(
-            sql.Identifier(schema),
-            sql.Identifier(table),
-            col_list,
-            select_list,
-            sql.Identifier(temp_name),
-            pk_list,
-        )
-    cur.execute(q)
-
-
-# ----------------------------
-# メイン
-# ----------------------------
-def main():
-    """
-    フロー
-    1) 引数解析・対象CSV列挙・ヘッダー一致検証
-    2) DB接続・スキーマ確保・テーブル作成（必要時）
-    3) append:   直接COPY
-       upsert:   一時テーブルにCOPY → ON CONFLICTでUPSERT
-    """
-    args = parse_args()
-    data_dir = Path(args.data_root) / args.table
-    files = list_csv_files(data_dir)
-    if not files:
-        print(f"[INFO] ファイルなし: {data_dir} に CSV が見つかりません。")
+    if df.empty:
         return
 
-    headers = validate_headers_consistent(files, args.encoding)
-    pk_cols = [c.strip() for c in args.pk.split(",") if c.strip()] if args.mode == "upsert" else []
+    df2 = df.reindex(columns=columns)
+    df2 = df2.where(pd.notna(df2), "")  # NaN -> ""
 
-    conn = connect(args)
+    buf = io.StringIO()
+    df2.to_csv(buf, index=False, header=False)
+    buf.seek(0)
+
+    raw_conn = engine.raw_connection()
     try:
-        with conn.cursor() as cur:
-            # スキーマ＆テーブル
-            ensure_schema(cur, args.schema)
-            exists = table_exists(cur, args.schema, args.table)
-
-            if not exists and args.create:
-                print(f"[INFO] テーブル未存在のため作成: {args.schema}.{args.table}")
-                create_table_text_columns(cur, args.schema, args.table, headers)
-                exists = True
-            elif not exists and not args.create:
-                raise RuntimeError(
-                    f"テーブル {args.schema}.{args.table} が存在しません。--create を指定して自動作成するか、先に作成してください。"
-                )
-
-            # appendモードでtruncate指定 → フルリロードに便利
-            if args.mode == "append" and args.truncate and exists:
-                print(f"[INFO] TRUNCATE: {args.schema}.{args.table}")
-                truncate_table(cur, args.schema, args.table)
-
-            # upsertモードでは一意制約が必要
-            if args.mode == "upsert":
-                ensure_unique_constraint(cur, args.schema, args.table, pk_cols)
-
-            # ファイルごとに処理（低メモリ）
-            for i, path in enumerate(files, 1):
-                print(f"[INFO] ({i}/{len(files)}) {path.name} 処理中 …")
-
-                if args.mode == "append":
-                    # そのままターゲットにCOPY
-                    copy_into_target_append(
-                        cur, args.schema, args.table, path, args.delimiter, args.quotechar, args.encoding
-                    )
-                else:
-                    # UPSERT: 一時テーブルに入れてからマージ
-                    temp_name = f"tmp_{args.table}"
-                    create_temp_table(cur, temp_name, headers)
-                    copy_into_temp(cur, temp_name, path, args.delimiter, args.quotechar, args.encoding)
-                    upsert_from_temp(cur, args.schema, args.table, temp_name, headers, pk_cols)
-                    # 一時テーブルはトランザクション終了時に自動削除
-
-        conn.commit()
-        print(f"[DONE] {len(files)} 個のファイルを {args.mode.upper()} で {args.schema}.{args.table} へ反映完了。")
-
-    except Exception:
-        conn.rollback()
-        raise
+        with raw_conn.cursor() as cur:
+            cur.copy_expert(
+                sql=(
+                    f'COPY {table_fqtn} ({", ".join([f"""\"{c}\"""" for c in columns])}) '
+                    f"FROM STDIN WITH (FORMAT CSV, NULL '')"
+                ),
+                file=buf,
+            )
+        raw_conn.commit()
     finally:
-        conn.close()
+        raw_conn.close()
 
+# -------------------------------------------------
+# コア：UPSERT
+# -------------------------------------------------
+def upsert_table(
+    engine: Engine,
+    table_name: str,
+    cfg: dict,
+    csv_root: Path,
+    chunksize: int = 200_000,
+    auto_add_columns: bool = False,
+):
+    """
+    CSV群を読み→正規化（重複列は _1.._k）→ TEMP(TEXT) → UPSERT。
+    - rawはTEXTのみ
+    - 複合PKOK
+    - 空欄は本物のNULL
+    - 列の和集合は「最初優先・新規は末尾」
+    """
+    folder = cfg["folder"]
+    pattern = cfg.get("filename_glob", "*.csv")
+    pk_cols = cfg["primary_key"]
+    target_base = cfg.get("target_table", table_name)
+    schema = TARGET_SCHEMA
+    target_fqtn = f'"{schema}"."{target_base}"'
+
+    files = _iter_csv_files(csv_root, folder, pattern)
+    if not files:
+        print(f"[{table_name}] No CSV files under {csv_root / folder}")
+        return
+
+    # --- 正規化計画（ここが重複列対応のキモ） ---
+    csv_columns, norm_by_file, max_dup = _union_csv_headers(files)
+
+    # ログ（Tip①）
+    series_map = {name: [f"{name}_{i}" for i in range(1, n+1)] for name, n in max_dup.items() if n > 1}
+    if series_map:
+        print(f"[{table_name}] normalized series: {series_map}")
+    for f in files:
+        print(f"[{table_name}] header ({f.name}) -> {norm_by_file[f]}")
+    print(f"[{table_name}] union columns       -> {csv_columns}")
+
+    # --- ターゲットテーブル準備 ---
+    if not table_exists(engine, schema, target_base):
+        create_text_table(engine, schema, target_base, csv_columns, pk_cols)
+        db_columns = csv_columns[:]
+    else:
+        db_columns = get_table_columns(engine, schema, target_base)
+        missing = [c for c in csv_columns if c not in db_columns]
+        if missing:
+            if auto_add_columns:
+                add_missing_text_columns(engine, schema, target_base, missing)
+                db_columns = get_table_columns(engine, schema, target_base)
+                print(f'[{table_name}] Added new columns: {", ".join(missing)}')
+            else:
+                print(f'[{table_name}] WARNING: Ignoring new CSV columns (use --auto-add-columns to add): {", ".join(missing)}')
+
+    # --- TEMP TABLE 作成 ---
+    temp_fqtn = _make_temp_text_table(engine, db_columns)
+
+    # --- 読み込み & COPY（names=正規化済み、pandasの自動改名は無効化） ---
+    for f in files:
+        print(f"[{table_name}] Loading {f}")
+        norm_cols = norm_by_file[f]
+
+        for chunk in pd.read_csv(
+            str(f),
+            header=0,                # 先頭行は元ヘッダ（読み飛ばされる）
+            names=norm_cols,         # 正規化後のヘッダに置き換え
+            mangle_dupe_cols=False,  # pandasの .1 付与を抑止（既に一意）
+            dtype=str,
+            chunksize=chunksize,
+            na_filter=True,
+            keep_default_na=False,
+            na_values=[""],          # 空欄のみ欠損 → COPYでNULL
+        ):
+            # DB列に合わせて整形：欠け列は欠損、余分は落とす
+            for c in db_columns:
+                if c not in chunk.columns:
+                    chunk[c] = pd.NA
+            chunk = chunk[db_columns]
+            _copy_df_to_table(engine, chunk, temp_fqtn, db_columns)
+
+    # --- UPSERT ---
+    non_key_cols = [c for c in db_columns if c not in pk_cols]
+    set_clause = (
+        "SET " + ", ".join([f'"{c}"=EXCLUDED."{c}"' for c in non_key_cols])
+        if non_key_cols else "DO NOTHING"
+    )
+
+    upsert_sql = f"""
+        INSERT INTO {target_fqtn} ({", ".join([f'"{c}"' for c in db_columns])})
+        SELECT {", ".join([f'"{c}"' for c in db_columns])} FROM {temp_fqtn}
+        ON CONFLICT ({", ".join([f'"{c}"' for c in pk_cols])})
+        DO UPDATE {set_clause};
+    """
+    with engine.begin() as conn:
+        conn.execute(text(upsert_sql))
+
+    print(f"[{table_name}] Upsert completed.")
+
+# -------------------------------------------------
+# スナップショット（Parquet）
+# -------------------------------------------------
+def snapshot_table_to_parquet(engine: Engine, table_name: str, out_root: Path):
+    schema = TARGET_SCHEMA
+    fqtn = f'"{schema}"."{table_name}"'
+    date_folder = out_root / datetime.now().strftime("%Y%m%d")
+    date_folder.mkdir(parents=True, exist_ok=True)
+    out_path = date_folder / f"{table_name}.parquet"
+
+    print(f"[snapshot] {fqtn} -> {out_path}")
+    with engine.connect() as conn:
+        df = pd.read_sql(f"SELECT * FROM {fqtn}", conn)
+    df.to_parquet(str(out_path), index=False)
+    print(f"[snapshot] Wrote {out_path}")
+
+# -------------------------------------------------
+# CSVクリーンアップ
+# -------------------------------------------------
+def clean_old_csvs(csv_root: Path, archive_root: Path | None, retention_days: int, dry_run: bool = True):
+    cutoff = datetime.now() - timedelta(days=retention_days)
+    total = 0
+
+    for table_folder in csv_root.iterdir():
+        if not table_folder.is_dir():
+            continue
+        for f in table_folder.glob("*.csv"):
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            if mtime < cutoff:
+                total += 1
+                if dry_run:
+                    print(f"[dry-run] remove {f}")
+                else:
+                    if archive_root:
+                        rel = f.relative_to(csv_root)
+                        dest = archive_root / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(f), str(dest))
+                        print(f"[moved] {f} -> {dest}")
+                    else:
+                        f.unlink()
+                        print(f"[removed] {f}")
+
+    print(f"[clean] targets={total}, dry_run={dry_run}")
+
+# -------------------------------------------------
+# CLI
+# -------------------------------------------------
+def cmd_ingest(args):
+    engine = get_engine()
+    ensure_schema(engine, TARGET_SCHEMA)
+    tables = load_config()
+
+    targets = [args.table] if args.table else list(tables.keys())
+    for name in targets:
+        if name not in tables:
+            print(f"Unknown table '{name}'. Available: {', '.join(tables.keys())}")
+            sys.exit(1)
+        upsert_table(
+            engine,
+            name,
+            tables[name],
+            PATHS["CSV_ROOT"],
+            chunksize=args.chunksize,
+            auto_add_columns=args.auto_add_columns,
+        )
+
+def cmd_snapshot(args):
+    engine = get_engine()
+    tables = load_config()
+    targets = [args.table] if args.table else list(tables.keys())
+    for name in targets:
+        cfg = tables[name]
+        snapshot_table_to_parquet(engine, cfg.get("target_table", name), PATHS["PARQUET_ROOT"])
+
+def cmd_clean(args):
+    days = get_retention_days()
+    archive = PATHS["ARCHIVE_ROOT"] if args.archive else None
+    clean_old_csvs(PATHS["CSV_ROOT"], archive, days, dry_run=args.dry_run)
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="csv_to_db",
+        description="CSV ingestion -> Postgres upsert (TEXT + NULL blanks) -> Parquet snapshot",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_ing = sub.add_parser("ingest", help="ingest CSVs and UPSERT into Postgres (raw TEXT)")
+    p_ing.add_argument("--table", help="single table to ingest (default: all)")
+    p_ing.add_argument("--chunksize", type=int, default=200_000, help="pandas read_csv chunksize")
+    p_ing.add_argument("--auto-add-columns", action="store_true",
+                       help="if CSV has new columns, ALTER TABLE ADD COLUMN (TEXT)")
+    p_ing.set_defaults(func=cmd_ingest)
+
+    p_snap = sub.add_parser("snapshot", help="export tables from Postgres to Parquet")
+    p_snap.add_argument("--table", help="single table to snapshot (default: all)")
+    p_snap.set_defaults(func=cmd_snapshot)
+
+    p_clean = sub.add_parser("clean", help="delete or archive old CSV files")
+    p_clean.add_argument("--archive", action="store_true", help="move files to archive instead of deleting")
+    p_clean.add_argument("--dry-run", action="store_true", help="only print targets")
+    p_clean.set_defaults(func=cmd_clean)
+
+    args = parser.parse_args()
+    args.func(args)
 
 if __name__ == "__main__":
     main()
