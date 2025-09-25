@@ -33,8 +33,19 @@ PATHS = get_paths() # dict[str, Path] を想定
 # ヘルパー：設定 & ファイル列挙
 # -------------------------------------------------
 def load_config() -> dict:
-    with CFG_PATH.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f)["tables"]
+    with CFG_PATH.open("r", encoding="utf8") as f:
+        cfg = yaml.safe_load(f)
+
+        defaults = cfg.get("defaults", {})
+        tables = cfg.get("tables", {})
+
+        for table_name, spec in tables.items():
+            # ネストした設定はspecですべて上書きされてしまうため注意
+            merged = defaults | spec
+            tables[table_name] = merged
+
+        cfg["tables"] = tables
+        return cfg
 
 
 def _iter_csv_files(folder_root: Path, folder: str, pattern: str) -> list[Path]:
@@ -70,11 +81,6 @@ def _plan_normalized_headers(files: list[Path]) -> tuple[list[str], dict[Path, l
 
     # 1) 各ファイルへのraw header
     raw_by_file: dict[Path, list[str]] = {f: _read_raw_header(f) for f in files}
-    
-
-# --------------------
-# ここから下理解していない
-
 
     # 2) 列ごとの最大多重度
     max_dup_count: dict[str, int] = defaultdict(int)

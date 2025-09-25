@@ -1,3 +1,7 @@
+defaults:
+  encoding: utf-8
+  chunksize: 200000
+
 tables:
   links:
     folder: "links"
