@@ -1,35 +1,45 @@
 ===Project Directory Structure===
 
 .
-|-- .devcontainer
-|   |-- Dockerfile
-|   |-- devcontainer.json
-|   `-- supervisord.conf
-|-- .dockerignore
-|-- .env
-|-- .env.prod
-|-- .sqlfluff
-|-- .sqlfluffignore
-|-- LICENSE
-|-- README.md
-|-- create_hello_world.py
-|-- docker-compose.dev.yml
-|-- docker-compose.yml
-|-- file_describe_all_files.txt
-|-- ingestion
-|   |-- api-request
-|   |   |-- api_request.py
-|   |   `-- insert_records.py
-|   |-- csv_to_db.py
-|   |-- output.txt
-|   `-- playwright_sample.py
-|-- main.py
-|-- output.txt
-|-- pyproject.toml
-|-- requirements.txt
-`-- supervisord.log
+├── .devcontainer
+│   ├── devcontainer.json
+│   ├── Dockerfile
+│   └── supervisord.conf
+├── .dockerignore
+├── .env
+├── .env.example
+├── .env.prod
+├── .sqlfluff
+├── .sqlfluffignore
+├── create_hello_world.py
+├── docker-compose.dev.yml
+├── docker-compose.yml
+├── file_describe_all_files.txt
+├── hello_world_ingestion.py
+├── hello_world.sql
+├── ingestion
+│   ├── api-request
+│   │   ├── api_request.py
+│   │   └── insert_records.py
+│   ├── config
+│   │   └── tables.yml
+│   ├── csv_to_db.py
+│   ├── output.txt
+│   ├── playwright_sample.py
+│   └── utils.py
+├── LICENSE
+├── main.py
+├── memo.ipynb
+├── output.txt
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+├── superset
+│   ├── Dockerfile.superset
+│   └── superset_config.py
+└── supervisord.log
 
-4 directories, 24 files
+6 directories, 32 files
 
 
 
@@ -61,9 +71,9 @@
   "mounts": [
     "source=${localEnv:HOME}/.dotfiles,target=/home/dev/.dotfiles,type=bind,consistency=cached,readonly"
   ],
-  "postCreateCommand": "bash -lc 'chmod +x /home/dev/.dotfiles/bootstrap.sh || true; DOTFILES=/home/dev/.dotfiles /home/dev/.dotfiles/bootstrap.sh || ture'",
+  "postCreateCommand": "bash -lc 'chmod +x /home/dev/.dotfiles/bootstrap.sh || true; DOTFILES=/home/dev/.dotfiles /home/dev/.dotfiles/bootstrap.sh || true'",
 
-  "forwardPorts": [5432, 3000, 6080],
+  "forwardPorts": [5432, 3000, 6080, 8088],
   "remoteUser": "dev",
 
   "customizations": {
@@ -201,6 +211,7 @@ priority=4
 
 === docker-compose.yml===
 
+name: tr-dbt-dimensional
 services:
   app:
     build:
@@ -209,7 +220,7 @@ services:
       args:
         USER_UID: ${LOCAL_UID:-1000}
         USER_GID: ${LOCAL_GID:-1000}
-        ENABLE_GUI: "false"   # 本番はGUIなし
+        ENABLE_GUI: "false"
     env_file:
       - ./.env
     working_dir: /workspace/project
@@ -217,7 +228,6 @@ services:
       - db
     networks:
       - metanet1
-    # 本番は bind mount なし（イミュータブル）
 
   db:
     image: postgres:16
@@ -226,9 +236,8 @@ services:
       - ./.env
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # 本番はFW/リバプロで制御するなら ports を外してもOK
     ports:
-      - "5432:5432"
+      - "5432:5432"   # 本番では外すのが安全
     networks:
       - metanet1
     healthcheck:
@@ -237,16 +246,16 @@ services:
       timeout: 3s
       retries: 10
 
-
+  # （将来削除予定）Metabase は現状維持
   metabase:
     image: metabase/metabase:latest
     restart: always
     depends_on:
       db:
-        condition: service_healthy # db が healthy になるまで待つ
+        condition: service_healthy
     environment:
       MB_DB_TYPE: postgres
-      MB_DB_DBNAME: ${POSTGRES_DB:-metabase_appdb}
+      MB_DB_DBNAME: ${POSTGRES_DB}
       MB_DB_HOST: db
       MB_DB_PORT: ${POSTGRES_PORT:-5432}
       MB_DB_USER: ${POSTGRES_USER:-metabase_user}
@@ -256,12 +265,107 @@ services:
     ports:
       - "3000:3000"
 
+  # ===== 追加：Redis =====
+  redis:
+    image: redis:7-alpine
+    restart: always
+    networks:
+      - metanet1
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ===== Superset (Web) =====
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile.superset
+    image: local/superset:celery
+    container_name: superset
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
+      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - metanet1
+    ports:
+      - "8088:8088"
+    command: ["/bin/bash", "-c", "gunicorn -w 4 -k gevent --timeout 60 -b 0.0.0.0:8088 'superset.app:create_app()'"]
+
+  # ===== 追加：Celery Worker =====
+  superset-worker:
+    image: local/superset:celery
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
+      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      superset:
+        condition: service_started
+    networks:
+      - metanet1
+    command: ["celery", "--app=superset.tasks.celery_app:app", "worker", "--pool=prefork", "-O", "fair", "-c", "4"]
+
+  # ===== 追加：Celery Beat (RedBeat) =====
+  superset-beat:
+    image: local/superset:celery
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
+      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      superset:
+        condition: service_started
+    networks:
+      - metanet1
+    command: ["celery", "--app=superset.tasks.celery_app:app", "beat"]
+
 networks:
   metanet1:
     driver: bridge
 
 volumes:
   pgdata:
+  superset_home:
 
 
 === docker-compose.dev.yml===
@@ -275,13 +379,13 @@ services:
         USER_UID: ${LOCAL_UID:-1000}
         USER_GID: ${LOCAL_GID:-1000}
         ENABLE_GUI: "true"
-        NOVNC_PASSWORD: ${NOVNC_PASSWORD}   # ← .env から build arg で注入
+        NOVNC_PASSWORD: ${NOVNC_PASSWORD}
     env_file:
       - .env
     volumes:
       - ./:/workspace/project:cached
     expose:
-      - "6080"   # 外部公開はせず、devcontainer の port forward 経由で利用
+      - "6080"
     environment:
       - DISPLAY=:99
     command: ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
@@ -293,6 +397,14 @@ services:
   metabase:
     ports:
       - "3000:3000"
+
+  superset:
+    ports:
+      - "8088:8088"
+
+  redis:
+    ports:
+      - "6379:6379"
 
 
 === requirements.txt===
@@ -306,8 +418,11 @@ ruff
 psycopg2-binary
 requests
 pandas
+pyarrow
+pyyaml
 playwright
 sqlalchemy
+jupyter
 
 
 === .dockerignore ===
@@ -336,3 +451,123 @@ POSTGRES_USER=admin
 POSTGRES_PASSWORD=admin12345
 POSTGRES_DB=mypostgres
 
+# ターゲットスキーマ
+TARGET_SCHEMA=raw
+
+# データ・出力パス
+DATA_DIR=./data
+CSV_ROOT=./data/csvs_demo
+PARQUET_ROOT=./data/parquet
+ARCHIVE_ROOT=./data/archive
+
+# CSV 保持日数
+CSV_RETENTION_DAYS=45
+
+# ===== Superset (最小) =====
+SUPERSET_SECRET_KEY=9502593ec5f48cb40b9ba0b807230d5c6b4d37ea245f989c3629fcac7b57fd1f
+SUPERSET_DATABASE_URI=postgresql+psycopg2://admin:admin12345@db:5432/superset
+
+# 初期管理者
+SUPERSET_ADMIN_USERNAME=admin
+SUPERSET_ADMIN_PASSWORD=admin12345
+SUPERSET_ADMIN_FIRST_NAME=Admin
+SUPERSET_ADMIN_LAST_NAME=User
+SUPERSET_ADMIN_EMAIL=egwats@gmail.com
+
+# Redis（デフォルトのままでもOK）
+REDIS_HOST=redis
+REDIS_PORT=6379
+
+
+=== superset/Dockerfile.superset ===
+
+# change this to apache/superset:5.0.0 or whatever version you want to build from;
+# otherwise the default is the latest commit on GitHub master branch
+FROM apache/superset:latest
+
+USER root
+
+# Set environment variable for Playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/playwright-browsers
+
+# Install packages using uv into the virtual environment
+RUN . /app/.venv/bin/activate && \
+    uv pip install \
+    # install psycopg2 for using PostgreSQL metadata store - could be a MySQL package if using that backend:
+    psycopg2-binary \
+    # add the driver(s) for your data warehouse(s), in this example we're showing for Microsoft SQL Server:
+    redis gevent greenlet \
+    # package needed for using single-sign on authentication:
+    # Authlib \
+    # openpyxl to be able to upload Excel files
+    openpyxl \
+    # Pillow for Alerts & Reports to generate PDFs of dashboards
+    Pillow
+    # install Playwright for taking screenshots for Alerts & Reports. This assumes the feature flag PLAYWRIGHT_REPORTS_AND_THUMBNAILS is enabled
+    # That feature flag will default to True starting in 6.0.0
+    # Playwright works only with Chrome.
+    # If you are still using Selenium instead of Playwright, you would instead install here the selenium package and a headless browser & webdriver
+    # playwright \
+    # && playwright install-deps \
+    # && PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/playwright-browsers playwright install chromium
+# Switch back to the superset user
+USER superset
+
+CMD ["/app/docker/entrypoints/run-server.sh"]
+
+
+=== superset/superset_config.py ===
+
+import os
+
+# ===== Security =====
+SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY", "please-change-me")
+
+# ===== Metadata DB =====
+SQLALCHEMY_DATABASE_URI = os.environ.get("SUPERSET_DATABASE_URI")
+
+# ===== Redis (Cache & Celery broker/result) =====
+REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}"
+
+# Cache (ダッシュボード/クエリ高速化)
+CACHE_CONFIG = {
+    "CACHE_TYPE": "RedisCache",
+    "CACHE_DEFAULT_TIMEOUT": 300,
+    "CACHE_KEY_PREFIX": "superset_",
+    "CACHE_REDIS_URL": f"{REDIS_URL}/1",
+}
+DATA_CACHE_CONFIG = CACHE_CONFIG
+
+# Celery（非同期処理 / Alerts & Reports 等）
+class CeleryConfig:
+    broker_url = f"{REDIS_URL}/0"
+    result_backend = f"{REDIS_URL}/0"
+    task_annotations = {"*": {"rate_limit": "10/s"}}
+    worker_send_task_events = True
+    task_send_sent_event = True
+
+CELERY_CONFIG = CeleryConfig
+
+# =====（任意）機能フラグ =====
+# Alerts & Reports を使う場合に有効化（ヘッドレスブラウザ準備も必要）
+FEATURE_FLAGS = {
+    # "ALERT_REPORTS": True,
+}
+
+# =====（任意）メール送信（レポート配信に利用） =====
+# EMAIL_NOTIFICATIONS = True
+# SMTP_HOST = "smtp.example.com"
+# SMTP_PORT = 587
+# SMTP_STARTTLS = True
+# SMTP_SSL = False
+# SMTP_USER = "user"
+# SMTP_PASSWORD = "password"
+# SMTP_MAIL_FROM = "no-reply@example.com"
+
+# =====（任意）レポート画像レンダリング用 WebDriver =====
+# REPORTS_WEBDRIVER = "chrome"
+# WEBDRIVER_BASEURL = os.environ.get("WEBDRIVER_BASEURL", "http://superset:8088/")
+# WEBDRIVER_TYPE = "chrome"
+# WEBDRIVER_OPTION_ARGS = ["--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]

@@ -5,8 +5,9 @@
     "../docker-compose.dev.yml"
   ],
   "service": "app",
+  "runservicies": ["app"],
   "workspaceFolder": "/workspace/project",
-  "shutdownAction": "stopCompose",
+  "shutdownAction": "none",
   "overrideCommand": false,
 
   "features": {
@@ -24,9 +25,9 @@
   "mounts": [
     "source=${localEnv:HOME}/.dotfiles,target=/home/dev/.dotfiles,type=bind,consistency=cached,readonly"
   ],
-  "postCreateCommand": "bash -lc 'chmod +x /home/dev/.dotfiles/bootstrap.sh || true; DOTFILES=/home/dev/.dotfiles /home/dev/.dotfiles/bootstrap.sh || ture'",
+  "postCreateCommand": "bash -lc 'chmod +x /home/dev/.dotfiles/bootstrap.sh || true; DOTFILES=/home/dev/.dotfiles /home/dev/.dotfiles/bootstrap.sh || true'",
 
-  "forwardPorts": [5432, 3000, 6080],
+  "forwardPorts": [5432, 3000, 6080, 8088],
   "remoteUser": "dev",
 
   "customizations": {

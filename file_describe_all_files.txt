@@ -1,61 +1,104 @@
 ===Project Directory Structure===
 
-
-現在 postgres, dbtを中心にしてデータ分析基盤の開発を行っています。データのingsetion 部分は、業務DbからCSVをダウンロードして、それをpostgresへupsertするようにしたい。
-どのようなフォルダ構成にするべきか、そして ingestion 用の python ファイルをどのように書いたらよいか、教えて下さい。
-
-以下条件。
-
-フォルダ階層は以下のようになっています。
 .
-|-- .devcontainer
-|   |-- Dockerfile
-|   |-- devcontainer.json
-|   `-- supervisord.conf
-|-- .env
-|-- .env.prod
-|-- data
-|   `-- csvs_demo
-|       |-- links
-|       |   |-- links_01.csv
-|       |   |-- links_02.csv
-|       |   |-- links_03.csv
-|       |   |-- links_04.csv
-|       |   |-- links_05.csv
-|       |   |-- links_06.csv
-|       |   `-- links_07.csv
-|       |-- movies
-|       |   |-- movies_01.csv
-|       |   |-- movies_02.csv
-|       |   |-- movies_03.csv
-|       |   |-- movies_04.csv
-|       |   |-- movies_05.csv
-|       |   |-- movies_06.csv
-|       |   `-- movies_07.csv
-|       |-- ratings
-|       |   |-- ratings_01.csv
-|       |   |-- ratings_02.csv
-|       |   |-- ratings_03.csv
-|       |   |-- ratings_04.csv
-|       |   |-- ratings_05.csv
-|       |   |-- ratings_06.csv
-|       |   `-- ratings_07.csv
-|       `-- tags
-|           |-- tags_01.csv
-|           |-- tags_02.csv
-|           `-- tags_03.csv
-|-- ingestion
-|   |-- csv_to_db.py
-|-- pyproject.toml
-|-- requirements.txt
+├── .devcontainer
+│   ├── devcontainer.json
+│   ├── Dockerfile
+│   └── supervisord.conf
+├── .dockerignore
+├── .env
+├── .env.example
+├── .env.prod
+├── .sqlfluff
+├── .sqlfluffignore
+├── create_hello_world.py
+├── data
+│   └── csvs_demo
+│       ├── links
+│       │   ├── links_01.csv
+│       │   ├── links_02.csv
+│       │   ├── links_03.csv
+│       │   ├── links_04.csv
+│       │   ├── links_05.csv
+│       │   ├── links_06.csv
+│       │   └── links_07.csv
+│       ├── links.csv
+│       ├── movies
+│       │   ├── movies_01.csv
+│       │   ├── movies_02.csv
+│       │   ├── movies_03.csv
+│       │   ├── movies_04.csv
+│       │   ├── movies_05.csv
+│       │   ├── movies_06.csv
+│       │   └── movies_07.csv
+│       ├── movies.csv
+│       ├── ratings
+│       │   ├── ratings_01.csv
+│       │   ├── ratings_02.csv
+│       │   ├── ratings_03.csv
+│       │   ├── ratings_04.csv
+│       │   ├── ratings_05.csv
+│       │   ├── ratings_06.csv
+│       │   └── ratings_07.csv
+│       ├── ratings.csv
+│       ├── README.md
+│       ├── tags
+│       │   ├── tags_01.csv
+│       │   ├── tags_02.csv
+│       │   └── tags_03.csv
+│       └── tags.csv
+├── docker-compose.dev.yml
+├── docker-compose.yml
+├── docs
+│   ├── dbt_tutorial
+│   │   ├── dbt-dimensional-modelling.drawio
+│   │   ├── img
+│   │   │   ├── 3nf-to-dimensional-model.png
+│   │   │   ├── conversation.png
+│   │   │   ├── data-modelling.png
+│   │   │   ├── dbt-dag.png
+│   │   │   ├── dimension-tables.png
+│   │   │   ├── fct_sales.png
+│   │   │   ├── logo.png
+│   │   │   ├── sales-order-header-detail.png
+│   │   │   ├── snowflake-schema.png
+│   │   │   ├── source-schema.png
+│   │   │   ├── star-schema.png
+│   │   │   └── target-schema.png
+│   │   ├── part01-setup-dbt-project.md
+│   │   ├── part02-identify-business-process.md
+│   │   ├── part03-identify-fact-dimension.md
+│   │   ├── part04-create-dimension.md
+│   │   ├── part05-create-fact.md
+│   │   ├── part06-document-model.md
+│   │   └── part07-consume-model.md
+│   └── ingestion
+│       └── csv_to_db_information.md
+├── file_describe_all_files.txt
+├── file_describe.txt
+├── hello_world_ingestion.py
+├── hello_world.sql
+├── ingestion
+│   ├── api-request
+│   │   ├── api_request.py
+│   │   └── insert_records.py
+│   ├── config
+│   │   └── tables.yml
+│   ├── csv_to_db.py
+│   ├── output.txt
+│   ├── playwright_sample.py
+│   └── utils.py
+├── LICENSE
+├── main.py
+├── Makefile
+├── memo.ipynb
+├── output.txt
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+├── superset
+│   ├── Dockerfile.superset
+│   └── superset_config.py
+└── supervisord.log
 
-
-このような形で データ分析基盤の ingestion 部分について、data フォルダの中に テーブル名ごとにフォルダが分かれており、そのフォルダの中に csv ファイルが複数格納されています。
-これは業務用DBから抽出したファイルで、すべてを統合して一つのテーブルになります。
-そして、ingestion フォルダにて、このcsvファイルを upsert （既存のDBに存在している行（primeby key で判定）はデータを更新し、存在していなかった行についてはデータを挿入する。）
-させたい。
-あと、csv ファイルは1日か1週間に一度更新されるが、直近の2ヶ月間くらいのデータを抽出して一つのcsvファイルにしているので、大部分は重複するデータか更新されるデータになります。
-このcsvファイルをずっと残しておくとメモリの限界が来るので、一定期間保存したあとは自動的に削除するようにしたい。
-使用している分析用DBはpostgresです。
-そしてpostgresのデータ更新を行ったら、その状態のデータを parquet などのデータ容量が少ないファイルに出力して、DBを再構成しなくてはならなくなったときでも問題なく最高性ができるようにしておく
-（まずはparqeut データを postgres に反映して、その後に csv ファイルを読み込んでい追加していく）
+16 directories, 84 files

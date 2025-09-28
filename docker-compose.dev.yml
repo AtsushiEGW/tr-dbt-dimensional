@@ -7,13 +7,13 @@ services:
         USER_UID: ${LOCAL_UID:-1000}
         USER_GID: ${LOCAL_GID:-1000}
         ENABLE_GUI: "true"
-        NOVNC_PASSWORD: ${NOVNC_PASSWORD}   # ← .env から build arg で注入
+        NOVNC_PASSWORD: ${NOVNC_PASSWORD}
     env_file:
       - .env
     volumes:
       - ./:/workspace/project:cached
     expose:
-      - "6080"   # 外部公開はせず、devcontainer の port forward 経由で利用
+      - "6080"
     environment:
       - DISPLAY=:99
     command: ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
@@ -25,3 +25,11 @@ services:
   metabase:
     ports:
       - "3000:3000"
+
+  superset:
+    ports:
+      - "8088:8088"
+
+  redis:
+    ports:
+      - "6379:6379"

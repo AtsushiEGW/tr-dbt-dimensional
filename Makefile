@@ -58,7 +58,15 @@ describe:
 	echo "\n\n\n=== .env ===\n" >> file_describe.txt
 	cat .env >> file_describe.txt
 
+	echo "\n\n\n=== superset/Dockerfile.superset ===\n" >> file_describe.txt
+	cat superset/Dockerfile.superset >> file_describe.txt
+
+	echo "\n\n\n=== superset/superset_config.py ===\n" >> file_describe.txt
+	cat superset/superset_config.py >> file_describe.txt
 
 	echo "\n\n\n=== .env ===\n" >> file_describe_all_files.txt
 	echo "===Project Directory Structure===\n" > file_describe_all_files.txt
 	tree -a -I ".git|.gitignore|.vscode|adventureworks|memo.md|note|supervisord.pid|test.py|backup" >> file_describe_all_files.txt
+
+
+
