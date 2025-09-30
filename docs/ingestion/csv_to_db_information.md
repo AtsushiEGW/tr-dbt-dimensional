@@ -300,3 +300,191 @@ python ingestion/csv_to_db.py clean --dry-run
 以上です。
 この運用に dbt の stg / models を重ねることで、**「raw は壊さず受け止める」「型・整形は下流で綺麗にする」**という設計を貫けます。
 他に「tables.yml に encoding/sep を持たせたい」「Parquet をパーティション出力したい」などの要望があれば、拡張案もすぐ書き起こします。
+
+
+
+# 全体的なパイプライン設計の提案について
+
+
+いいね、ローカル運用＋将来オンプレ移行前提で“DBと同時に生データを残す”ハイブリッドに最適化した最小だけど伸びやすい構成を提案します。まずはフォルダ構成→役割→PATHSと.env→Makefile雛形、の順で。
+
+⸻
+
+推奨構成（最小で始めてそのまま伸ばせる）
+
+ingestion/
+├─ fetchers/                 # 取得系（手動補助・playwright・APIラッパなど）
+│  ├─ __init__.py
+│  ├─ playwright_fetch.py
+│  └─ manual_drop_watch.py   # 手動置きファイル検知(オプション)
+├─ pipelines/                # パイプライン実行スクリプト（CLI）
+│  ├─ csv_to_db.py           # 既存：UPSERT/TEMP/COPY/Parquet/clean を担当
+│  └─ validate.py            # 取得直後の軽い検証（行数/ヘッダ等）
+├─ config/
+│  ├─ tables.yml             # テーブル定義（folder, pk, encoding, 既定値など）
+│  └─ logging.ini            # 将来 logging 切替用（最初は空でもOK）
+├─ logs/                     # 実行ログ（Makefileからリダイレクト）
+└─ bin/                      # 補助スクリプト/ワンライナー
+   └─ stamp.sh
+
+取得データや出力物は コード外（リポジトリ外でも可） の data/ 配下にまとめます（下記）。
+
+data/
+├─ landing/                  # 生データの永続保管（immutable）
+│  └─ team=<team>/table=<table>/
+│     └─ run_date=YYYYMMDD/
+│        └─ batch_id=<uuid>/
+│           ├─ parts/       # 元CSV(複数可)
+│           │  ├─ <filename1>.csv
+│           │  └─ <filename2>.csv
+│           └─ manifest.json  # 期間/件数/ハッシュ/取得方法など
+├─ work/                     # 作業域（必要なら）
+│  └─ tmp/                   # 一時展開など（再生成可）
+├─ db_ingestion/             # Postgres取り込み対象“ビュー”（結合しやすい置き場）
+│  └─ team1/
+│     ├─ table1/ *.csv
+│     └─ table2/ *.csv
+├─ archive/                  # 取り込み済みCSVの退避（一定期間で削除）
+└─ parquet/                  # Postgres→Parquet スナップショット
+   └─ YYYYMMDD/
+      ├─ table1.parquet
+      └─ table2.parquet
+
+	•	landing：取得した“そのまま”を必ず残す（再現性・監査用）。
+	•	db_ingestion：いまの csv_to_db.py が読むルート。landing から必要に応じて整形/結合して配置（最初は手で置いてOK、後で自動化）。
+	•	archive：取り込み後の退避先（保持期間を過ぎたら削除）。
+	•	parquet：日次スナップショット（DB復元のシード）。
+
+「landingはimmutable、db_ingestionは取り込み用の見せ方」と分けると、将来的に処理を差し替えても影響範囲が明確になります。
+
+⸻
+
+PATHS と .env（既定値）
+
+utils.get_paths() はこの既定を持たせておくのが楽です：
+
+DATA_DIR=./data
+CSV_ROOT=${DATA_DIR}/db_ingestion
+PARQUET_ROOT=${DATA_DIR}/parquet
+ARCHIVE_ROOT=${DATA_DIR}/archive
+LANDING_ROOT=${DATA_DIR}/landing
+
+	•	既存の CSV_ROOT だけ db_ingestion に向け直す（あなたの新しい配置に合致）。
+	•	LANDING_ROOT を新設（fetchers がここへ保存）。
+	•	取り込み対象は tables.yml の folder: team1/table1 のように階層付きで指定。
+
+tables.yml（例：エンコーディングのデフォルト＋個別上書き）：
+
+defaults:
+  encoding: utf-8
+  chunksize: 200000
+  filename_glob: "*.csv"
+
+tables:
+  table1:
+    folder: team1/table1
+    primary_key: ["id"]
+    # encoding は defaults を使用
+
+  table2:
+    folder: team1/table2
+    primary_key: ["k1","k2"]
+    encoding: shift_jis
+
+
+⸻
+
+使い方（Makefile ドリブン）
+
+最初は Airflow なしで Makefile で一気通貫を回します。
+
+Makefile（雛形）
+
+# ====== 基本設定 ======
+PYTHON := python
+ING := ingestion/pipelines/csv_to_db.py
+VAL := ingestion/pipelines/validate.py
+
+# env（必要に応じて .env を export する）
+include .env
+export
+
+# ====== タスク ======
+
+## 1) 取得（手動/自動）
+# 手動: ダウンロードしたCSVを data/landing/.../parts に置く
+# 自動: playwright で取得 → landing に保存（別スクリプト/将来）
+fetch:
+	@echo "[fetch] put CSVs under data/landing/... and/or run fetchers/*"
+
+## 2) 検証（任意：行数/ヘッダ/期間など）
+validate:
+	$(PYTHON) $(VAL) --landing $(LANDING_ROOT)
+
+## 3) 取り込み（UPSERT）
+# 全テーブル
+ingest:
+	$(PYTHON) $(ING) ingest --auto-add-columns | tee -a ingestion/logs/ingest.log
+
+# 個別テーブル
+ingest-%:
+	$(PYTHON) $(ING) ingest --table $* --auto-add-columns | tee -a ingestion/logs/ingest_$*.log
+
+## 4) スナップショット（Postgres -> Parquet）
+snapshot:
+	$(PYTHON) $(ING) snapshot | tee -a ingestion/logs/snapshot.log
+
+snapshot-%:
+	$(PYTHON) $(ING) snapshot --table $* | tee -a ingestion/logs/snapshot_$*.log
+
+## 5) クリーンアップ（取り込み済みCSVを退避/削除）
+# まずは dry-run で確認 → 問題なければ archive に移動
+clean-dry:
+	$(PYTHON) $(ING) clean --dry-run | tee -a ingestion/logs/clean.log
+
+clean-archive:
+	$(PYTHON) $(ING) clean --archive | tee -a ingestion/logs/clean.log
+
+clean-hard:
+	$(PYTHON) $(ING) clean | tee -a ingestion/logs/clean.log
+
+## 6) ワンショット（取得→検証→取り込み→スナップショット）
+all: fetch validate ingest snapshot
+	@echo "DONE"
+
+make ingest-table1 のように テーブル個別ターゲットを使えるのが運用で便利。
+
+⸻
+
+運用フロー（最初は手動＋一部自動）
+	1.	（手動 or playwright）で取得
+	•	保存先：data/landing/team=<team>/table=<table>/run_date=YYYYMMDD/batch_id=<uuid>/parts/*.csv
+	•	manifest.json（期間・件数・ハッシュ）を簡易でも良いので作ると後々助かります。
+	2.	必要なら整形して db_ingestion に配置
+	•	当面は“landing → 必要ファイルを db_ingestion にコピー”でもOK。
+	•	後で整形/結合（例えば1ファイルにまとめる）をスクリプト化しても良いです。
+	3.	取り込み（UPSERT）
+	•	make ingest（全テーブル）または make ingest-table1（個別）。
+	4.	スナップショット
+	•	make snapshot → data/parquet/YYYYMMDD/*.parquet に出力（DB復元用シード）。
+	5.	クリーンアップ
+	•	make clean-dry で対象確認 → make clean-archive で退避、一定期間後に clean-hard。
+
+将来 Airflow に移すときは、Make タスク1つ＝DAGの1タスク相当として移植できます。
+
+⸻
+
+これで何が嬉しいか（要点）
+	•	いまの csv_to_db.py を“そのまま”活かせる（CSV_ROOT を db_ingestion に変更するだけ）。
+	•	生データは landing に必ず残すので、事故っても後戻りできる。
+	•	Makefile でパイプライン化しておけば、将来 Airflow に移行する時も分解が簡単。
+	•	フォルダ責務が明確（landing=原本、db_ingestion=取り込みビュー、parquet=DBスナップショット、archive=退避）。
+
+⸻
+
+必要なら：
+	•	manifest.json のサンプルスキーマ
+	•	validate.py の最小実装（件数/ヘッダ/重複Keyチェック）
+	•	utils.get_paths() の pathlib 版（LANDING_ROOT 追加）
+
+もすぐ出します。どこから作っていきましょう？

@@ -12,7 +12,7 @@ import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from typing import Dict, List, Tuple
-from utils import (
+from ingestion.db_ingestion.utils import (
     get_engine, ensure_schema, get_paths, get_retention_days, today_stamp,
     table_exists, get_table_columns, create_text_table, add_missing_text_columns
 )
