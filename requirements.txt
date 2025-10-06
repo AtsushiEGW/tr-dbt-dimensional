@@ -12,3 +12,4 @@ pyyaml
 playwright
 sqlalchemy
 jupyter
+python-dateutil

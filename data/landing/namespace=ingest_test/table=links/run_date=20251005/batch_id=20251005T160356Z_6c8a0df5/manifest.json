@@ -1,0 +1,54 @@
+{
+  "namespace": "ingest_test",
+  "table": "links",
+  "run_date": "20251005",
+  "batch_id": "20251005T160356Z_6c8a0df5",
+  "source": "manual",
+  "extracted_at": "2025-10-05T16:03:56Z",
+  "encoding": "utf-8",
+  "files": [
+    {
+      "path": "parts/links_01.csv",
+      "size": 37434,
+      "md5": "d9fb8b880e3544c74e20d0857393c939",
+      "rows": 2005
+    },
+    {
+      "path": "parts/links_02.csv",
+      "size": 17248,
+      "md5": "28e191799c50c15034183f4e8c7efca8",
+      "rows": 904
+    },
+    {
+      "path": "parts/links_03.csv",
+      "size": 19736,
+      "md5": "7055428c860e203d47686c9772c315a1",
+      "rows": 1030
+    },
+    {
+      "path": "parts/links_04.csv",
+      "size": 19768,
+      "md5": "fc3b46fd674681fd0da2597527ae366d",
+      "rows": 1030
+    },
+    {
+      "path": "parts/links_05.csv",
+      "size": 26559,
+      "md5": "949949212cbdfbbf2fc354a52785e8cd",
+      "rows": 1340
+    },
+    {
+      "path": "parts/links_06.csv",
+      "size": 49262,
+      "md5": "6356595ed821ddb852a16cf18c8b8b26",
+      "rows": 2311
+    },
+    {
+      "path": "parts/links_07.csv",
+      "size": 40804,
+      "md5": "dc063a459b0d71fda120db7d701d5d46",
+      "rows": 1743
+    }
+  ],
+  "notes": "manual drop import"
+}
