@@ -1,0 +1,54 @@
+{
+  "namespace": "ingest_test",
+  "table": "movies",
+  "run_date": "20251006",
+  "batch_id": "20251006T051828Z_3580b958",
+  "source": "manual",
+  "extracted_at": "2025-10-06T05:18:28Z",
+  "encoding": "utf-8",
+  "files": [
+    {
+      "path": "parts/movies_01.csv",
+      "size": 94746,
+      "md5": "bc54242b2b293567fe1a5f4875deeaf5",
+      "rows": 2005
+    },
+    {
+      "path": "parts/movies_02.csv",
+      "size": 42078,
+      "md5": "890caaf257b0e1b963353d4d2a5656e9",
+      "rows": 904
+    },
+    {
+      "path": "parts/movies_03.csv",
+      "size": 48660,
+      "md5": "f9e9486babd0c780b37275a3d113a1b2",
+      "rows": 1030
+    },
+    {
+      "path": "parts/movies_04.csv",
+      "size": 50371,
+      "md5": "fadd88893d7f5d9e3fcbe7b4fc7b6b84",
+      "rows": 1030
+    },
+    {
+      "path": "parts/movies_05.csv",
+      "size": 71432,
+      "md5": "2e48c0ea2a91d4297f9a7cf3cca23a0f",
+      "rows": 1340
+    },
+    {
+      "path": "parts/movies_06.csv",
+      "size": 122219,
+      "md5": "beb021e296670f6a62d769721d93c02d",
+      "rows": 2311
+    },
+    {
+      "path": "parts/movies_07.csv",
+      "size": 87804,
+      "md5": "2d1ee748bca0378f748cb7648dcaee0c",
+      "rows": 1743
+    }
+  ],
+  "notes": "manual drop import"
+}

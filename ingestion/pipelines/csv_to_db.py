@@ -5,6 +5,8 @@ import io
 import os
 import sys
 import shutil
+import time
+import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ingestion.utils import (
-    get_engine, ensure_schema, get_paths, today_stamp,
+    get_engine, ensure_schema, get_paths,
     table_exists, get_table_columns, create_text_table, add_missing_text_columns
 )
 
@@ -38,7 +40,7 @@ def load_config() -> dict:
     defaults = cfg.get("defaults", {})
     merged_tables = {}
     for name, spec in cfg["tables"].items():
-        merged_tables[name] = (defaults | spec)  # 3.12: dict merge
+        merged_tables[name] = (defaults | spec)  # py3.9+: dict merge
     cfg["tables"] = merged_tables
     return cfg
 
@@ -64,17 +66,17 @@ def _read_header_raw(path: Path, encoding: str) -> list[str]:
             hdr = next(reader)
         except StopIteration:
             return []
-    # BOM (UTF-8 SIG) ヘッダーの除去
-    if hdr and hdr[0].startswith("\ufeff"):
-            hdr[0] = hdr[0].lstrip("\ufeff")
+    # BOM (UTF-8 SIG) の除去
+    if hdr and isinstance(hdr[0], str) and hdr[0].startswith("\ufeff"):
+        hdr[0] = hdr[0].lstrip("\ufeff")
     return hdr
 
 
 def _analyze_headers(files: list[Path], encoding: str) -> tuple[list[str], dict[Path, list[str]]]:
     """
     全ファイルのヘッダを解析し、
-    - union_cols: 和集合（各ベース名の最大多重度だけ xxx_1..xxx_k を並べる / 最初の出現順）
-    - norm_by_file: 各ファイルでの “正規化済みヘッダ名” を返す
+      - union_cols: 和集合（各ベース名の最大多重度だけ xxx_1..xxx_k を並べる / 最初の出現順）
+      - norm_by_file: 各ファイルでの “正規化済みヘッダ名” を返す
     """
     if not files:
         return [], {}
@@ -119,75 +121,41 @@ def _analyze_headers(files: list[Path], encoding: str) -> tuple[list[str], dict[
 
     return union_cols, norm_by_file
 
-def _dedupe_temp_by_pk(engine: Engine, temp_fqtn: str, pk_cols: list[str]):
-    """
-    TEMP テーブルの中で、主キーが重複している行を1つだけ残して削除する。
-    「どれを残すか」は任意だが、ここでは ctid を使って「後勝ち」にする。
-    """
-    if not pk_cols:
-        return  # PKなしテーブルでは何もしない
-
-    # t と d で PK が等しいペアのうち、ctid が小さい（＝先に入った方）を削除
-    pk_eq = " AND ".join([f't."{c}" = d."{c}"' for c in pk_cols])
-    sql = f"""
-        DELETE FROM {temp_fqtn} t
-        USING {temp_fqtn} d
-        WHERE {pk_eq}
-        AND t.ctid < d.ctid;
-    """
-    with engine.begin() as conn:
-        conn.execute(text(sql))
-
-
 
 # ---------------------------
-# COPY
+# Helpers: TEMP & COPY
 # ---------------------------
-def _copy_df_to_table(engine: Engine, df: pd.DataFrame, table_fqtn: str, columns: list[str]):
-    """
-    DataFrame -> COPY FROM STDIN (CSV)。
-    欠損は空文字にして CSV 化し、COPY 側の NULL '' により本物の NULL へ。
-    """
+def _unique_temp_name(table_name: str) -> str:
+    """ミリ秒＋乱数でユニークな一時テーブル名を生成"""
+    ms = int(time.time() * 1000)
+    rnd = secrets.token_hex(3)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in table_name)
+    return f"tmp_{safe}_{ms}_{rnd}"
+
+
+def _copy_df_via_copy(dbapi_conn, df: pd.DataFrame, temp_name: str, columns: list[str]):
+    """DBAPI接続で COPY ... FROM STDIN を実行（NaN→空文字→NULL '' で本物のNULL化）"""
     if df.empty:
         return
-    df2 = df.reindex(columns=columns)
-    df2 = df2.where(pd.notna(df2), "")  # NaN -> ""
-
+    # 列順合わせ + NaN を空文字へ
+    df2 = df.reindex(columns=columns).where(pd.notna(df), "")
     buf = io.StringIO()
     df2.to_csv(buf, index=False, header=False)
     buf.seek(0)
 
-    raw_conn = engine.raw_connection()
+    cur = dbapi_conn.cursor()
     try:
-        cur = raw_conn.cursor()  # context manager 非対応のため with にしない
-        try:
-            cols_sql = ", ".join([f'"{c}"' for c in columns])
-            cur.copy_expert(
-                sql=f'COPY {table_fqtn} ({cols_sql}) FROM STDIN WITH (FORMAT CSV, NULL \'\')',
-                file=buf,
-            )
-        finally:
-            cur.close()
-        raw_conn.commit()
+        cols_sql = ", ".join([f'"{c}"' for c in columns])
+        cur.copy_expert(
+            sql=f'COPY "{temp_name}" ({cols_sql}) FROM STDIN WITH (FORMAT CSV, NULL \'\')',
+            file=buf,
+        )
     finally:
-        raw_conn.close()
+        cur.close()
 
 
 # ---------------------------
-# TEMP TABLE
-# ---------------------------
-def _make_temp_text_table(engine: Engine, columns: list[str]) -> str:
-    """TEXT 列の TEMP TABLE を作成して FQTN (pg_temp.<name>) を返す。"""
-    temp_name = f"stg_{int(datetime.now().timestamp())}_{os.getpid()}"
-    temp_fqtn = f"pg_temp.{temp_name}"
-    cols_sql = ", ".join([f'"{c}" TEXT' for c in columns])
-    with engine.begin() as conn:
-        conn.execute(text(f'CREATE TEMP TABLE {temp_fqtn} ({cols_sql});'))
-    return temp_fqtn
-
-
-# ---------------------------
-# UPSERT
+# UPSERT（単一接続で完結）
 # ---------------------------
 def upsert_table(
     engine: Engine,
@@ -198,15 +166,8 @@ def upsert_table(
     auto_add_columns: bool,
 ):
     """
-    指定テーブル用に、db_ingestion 配下の CSV をすべて読み込み、
-    TEMP(TEXT) に積んでから ON CONFLICT(=UPSERT) で raw スキーマへ反映する。
-
-    ポリシー:
-    - すべて TEXT で取り込み（型変換は dbt 側）
-    - CSV の空欄は NULL（文字列 "null" ではない本物の NULL）
-    - 複合PK対応
-    - ヘッダは全CSVの「和集合」を採用。重複カラム名は _analyze_headers() で xxx_1, xxx_2... に正規化
-    - TEMP 内で主キー重複があれば「後勝ち」(最後に読んだ行を残す) で 1 行に正規化してから UPSERT
+    指定テーブルの CSV を列挙 → TEMP(TEXT) に積む → TEMP 内でPK重複を後勝ちで正規化 → ON CONFLICT でUPSERT。
+    すべて同一コネクションの中で完結させる。
     """
     folder = cfg["folder"]
     pattern = cfg.get("filename_glob", "*.csv")
@@ -217,19 +178,19 @@ def upsert_table(
     target_base = cfg.get("target_table", table_name)
     target_fqtn = f'"{schema}"."{target_base}"'
 
-    # 1) 対象CSVの列挙
+    # 1) 対象CSV
     files = _iter_csv_files(csv_root, folder, pattern)
     if not files:
         print(f"[{table_name}] No CSV files under {(csv_root / folder)}")
         return
 
-    # 2) 全CSVのヘッダを解析（重複ヘッダは xxx_1.. へ正規化）
+    # 2) ヘッダ解析
     union_cols, norm_by_file = _analyze_headers(files, encoding=encoding)
     if not union_cols:
         print(f"[{table_name}] WARNING: header not found")
         return
 
-    # 3) 取り込み先テーブルを用意（なければ TEXT で作成、あれば列差分をオプションで追加）
+    # 3) 取り込み先テーブル
     if not table_exists(engine, schema, target_base):
         create_text_table(engine, schema, target_base, union_cols, pk_cols)
         db_columns = union_cols[:]
@@ -244,71 +205,97 @@ def upsert_table(
             else:
                 print(f'[{table_name}] WARNING: New columns ignored (use --auto-add-columns): {", ".join(missing)}')
 
-    # 4) TEMP(TEXT) を作成（DB列に合わせる）
-    temp_fqtn = _make_temp_text_table(engine, db_columns)
-
-    # （任意だが大規模時に有効）TEMP に PK インデックスを張る
-    if pk_cols:
-        with engine.begin() as conn:
-            idx_cols = ", ".join([f'"{c}"' for c in pk_cols])
-            conn.execute(text(f'CREATE INDEX ON {temp_fqtn} ({idx_cols});'))
-
-    # 5) CSV を順に読み込み → TEMP へ COPY
-    for f in files:
-        print(f"[{table_name}] Loading {f}")
-        norm_cols = norm_by_file[f]
-
-        for chunk in pd.read_csv(
-            f,                      # Path はそのまま渡せる
-            header=0,               # 先頭行は元ヘッダ（names で置換）
-            names=norm_cols,        # 正規化後のヘッダに差し替え（重複は既に一意）
-            dtype=str,
-            chunksize=chunksize,
-            na_filter=True,
-            keep_default_na=False,  # 'NA'などを欠損扱いしない
-            na_values=[""],         # 空欄のみ欠損（→ COPY の NULL '' で本物の NULL）
-            encoding=encoding,
-        ):
-            # （推奨）PK欠損行は捨てる：NULL/空文字は UPSERT できないため
-            for pk in pk_cols:
-                if pk in chunk.columns:
-                    chunk = chunk[chunk[pk].notna() & (chunk[pk] != "")]
-
-            # DB列に合わせて整形：欠け列は欠損で追加、余分な列は落とす
-            for c in db_columns:
-                if c not in chunk.columns:
-                    chunk[c] = pd.NA
-            chunk = chunk[db_columns]
-
-            _copy_df_to_table(engine, chunk, temp_fqtn, db_columns)
-
-    # 6) TEMP 内の主キー重複を「後勝ち」で 1 行に揃える（同一キー重複での ON CONFLICT 多重更新を防止）
-    _dedupe_temp_by_pk(engine, temp_fqtn, pk_cols)
-
-    # 7) UPSERT 実行
-    non_key_cols = [c for c in db_columns if c not in pk_cols]
-    set_clause = (
-        "SET " + ", ".join([f'"{c}"=EXCLUDED."{c}"' for c in non_key_cols])
-        if non_key_cols else "DO NOTHING"
-    )
-
-    upsert_sql = f"""
-        INSERT INTO {target_fqtn} ({", ".join([f'"{c}"' for c in db_columns])})
-        SELECT {", ".join([f'"{c}"' for c in db_columns])} FROM {temp_fqtn}
-        ON CONFLICT ({", ".join([f'"{c}"' for c in pk_cols])})
-        DO UPDATE {set_clause};
-    """
+    # 4) 単一接続で TEMP→COPY→重複除去→UPSERT を完結
     with engine.begin() as conn:
-        conn.execute(text(upsert_sql))
+        # TEMP 作成（ON COMMIT DROP で自動掃除）
+        temp_name = _unique_temp_name(target_base)
+        cols_sql = ", ".join([f'"{c}" TEXT' for c in db_columns])
+        conn.execute(text(f'CREATE TEMP TABLE "{temp_name}" ({cols_sql}) ON COMMIT DROP;'))
+
+        # 任意：PK インデックス
+        if pk_cols:
+            idx_cols = ", ".join([f'"{c}"' for c in pk_cols])
+            conn.execute(text(f'CREATE INDEX ON "{temp_name}" ({idx_cols});'))
+
+        # 同一セッションの DBAPI 接続（COPYで使用）
+        # SQLAlchemy 2.x の場合:
+        dbapi_conn = getattr(conn.connection, "driver_connection", None)
+        if dbapi_conn is None:  # バージョン差異ケア
+            dbapi_conn = getattr(conn.connection, "connection")
+
+        # 5) CSV 読み込み → TEMP へ COPY
+        for f in files:
+            print(f"[{table_name}] Loading {f}")
+            norm_cols = norm_by_file[f]
+            for chunk in pd.read_csv(
+                f,
+                header=0,
+                names=norm_cols,
+                dtype=str,
+                chunksize=chunksize,
+                na_filter=True,
+                keep_default_na=False,
+                na_values=[""],         # 空欄のみ欠損 → COPY の NULL '' で本物の NULL
+                encoding=encoding,
+            ):
+                # PK 欠損は弾く（ON CONFLICT のキーにできないため）
+                for pk in pk_cols:
+                    if pk in chunk.columns:
+                        chunk = chunk[chunk[pk].notna() & (chunk[pk] != "")]
+
+                # DB列に合わせ（欠け列は欠損で追加、余分は落とす）
+                for c in db_columns:
+                    if c not in chunk.columns:
+                        chunk[c] = pd.NA
+                chunk = chunk[db_columns]
+
+                _copy_df_via_copy(dbapi_conn, chunk, temp_name, db_columns)
+
+        # 6) TEMP 内の主キー重複を “後勝ち” で 1 行に
+        if pk_cols:
+            pk_eq = " AND ".join([f't."{c}" = d."{c}"' for c in pk_cols])
+            conn.execute(text(f'''
+                DELETE FROM "{temp_name}" t
+                USING "{temp_name}" d
+                WHERE {pk_eq}
+                  AND t.ctid < d.ctid;
+            '''))
+
+        # 7) UPSERT
+        non_key_cols = [c for c in db_columns if c not in pk_cols]
+        set_clause = (
+            "SET " + ", ".join([f'"{c}"=EXCLUDED."{c}"' for c in non_key_cols])
+            if non_key_cols else "DO NOTHING"
+        )
+        cols_list = ", ".join([f'"{c}"' for c in db_columns])
+        pk_list = ", ".join([f'"{c}"' for c in pk_cols])
+
+        conn.execute(text(f'''
+            INSERT INTO {target_fqtn} ({cols_list})
+            SELECT {cols_list} FROM "{temp_name}"
+            ON CONFLICT ({pk_list}) DO UPDATE {set_clause};
+        '''))
 
     print(f"[{table_name}] Upsert completed.")
 
+
 # ---------------------------
-# SNAPSHOT (Parquet)
+# SNAPSHOT (Parquet) - 存在チェック付き
 # ---------------------------
 def snapshot_table_to_parquet(engine: Engine, table_name: str, out_root: Path):
     schema = TARGET_SCHEMA
     fqtn = f'"{schema}"."{table_name}"'
+
+    exists_sql = """
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = :schema AND table_name = :table
+    """
+    with engine.connect() as c:
+        if c.execute(text(exists_sql), {"schema": schema, "table": table_name}).scalar() is None:
+            print(f'[snapshot][skip] table not found: {fqtn}')
+            return
+
     date_folder = out_root / datetime.now().strftime("%Y%m%d")
     date_folder.mkdir(parents=True, exist_ok=True)
     out_path = date_folder / f"{table_name}.parquet"
