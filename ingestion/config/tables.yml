@@ -1,5 +1,6 @@
 defaults:
   encoding: utf-8
+  skiprows: 0
   chunksize: 200000
   filename_glob: "*.csv"
 
