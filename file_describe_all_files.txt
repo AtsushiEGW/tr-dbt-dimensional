@@ -1,82 +1,284 @@
 ===Project Directory Structure===
 
 .
-|-- .devcontainer
-|   |-- Dockerfile
-|   |-- devcontainer.json
-|   `-- supervisord.conf
-|-- .dockerignore
-|-- .env
-|-- .env.prod
-|-- .env.template
-|-- .sqlfluff
-|-- .sqlfluffignore
-|-- LICENSE
-|-- Makefile
-|-- README.md
-|-- create_hello_world.py
-|-- data
-|   `-- csvs_demo
-|       |-- README.md
-|       |-- links
-|       |   |-- links_01.csv
-|       |   |-- links_02.csv
-|       |   |-- links_03.csv
-|       |   |-- links_04.csv
-|       |   |-- links_05.csv
-|       |   |-- links_06.csv
-|       |   `-- links_07.csv
-|       |-- links.csv
-|       |-- movies
-|       |   |-- movies_01.csv
-|       |   |-- movies_02.csv
-|       |   |-- movies_03.csv
-|       |   |-- movies_04.csv
-|       |   |-- movies_05.csv
-|       |   |-- movies_06.csv
-|       |   `-- movies_07.csv
-|       |-- movies.csv
-|       |-- ratings
-|       |   |-- ratings_01.csv
-|       |   |-- ratings_02.csv
-|       |   |-- ratings_03.csv
-|       |   |-- ratings_04.csv
-|       |   |-- ratings_05.csv
-|       |   |-- ratings_06.csv
-|       |   `-- ratings_07.csv
-|       |-- ratings.csv
-|       |-- tags
-|       |   |-- tags_01.csv
-|       |   |-- tags_02.csv
-|       |   `-- tags_03.csv
-|       `-- tags.csv
-|-- docker-compose.dev.yml
-|-- docker-compose.yml
-|-- file_describe.txt
-|-- file_describe_all_files.txt
-|-- hello_world.sql
-|-- hello_world_ingestion.py
-|-- ingestion
-|   |-- __pycache__
-|   |   `-- utils.cpython-312.pyc
-|   |-- api-request
-|   |   |-- api_request.py
-|   |   `-- insert_records.py
-|   |-- config
-|   |   `-- tables.yml
-|   |-- db_ingestion
-|   |   |-- csv_to_db.py
-|   |   `-- utils.py
-|   |-- fetchers
-|   `-- playwright_sample.py
-|-- main.py
-|-- memo.ipynb
-|-- output.txt
-|-- pyproject.toml
-|-- requirements.txt
-|-- superset
-|   |-- Dockerfile.superset
-|   `-- superset_config.py
-`-- supervisord.log
+├── .devcontainer
+│   ├── devcontainer.json
+│   ├── Dockerfile
+│   └── supervisord.conf
+├── .dockerignore
+├── .env
+├── .env.prod
+├── .env.template
+├── .sqlfluff
+├── .sqlfluffignore
+├── data
+│   ├── archive
+│   ├── csvs_demo
+│   │   ├── links
+│   │   │   ├── links_01.csv
+│   │   │   ├── links_02.csv
+│   │   │   ├── links_03.csv
+│   │   │   ├── links_04.csv
+│   │   │   ├── links_05.csv
+│   │   │   ├── links_06.csv
+│   │   │   └── links_07.csv
+│   │   ├── links.csv
+│   │   ├── movies
+│   │   │   ├── movies_01.csv
+│   │   │   ├── movies_02.csv
+│   │   │   ├── movies_03.csv
+│   │   │   ├── movies_04.csv
+│   │   │   ├── movies_05.csv
+│   │   │   ├── movies_06.csv
+│   │   │   └── movies_07.csv
+│   │   ├── movies.csv
+│   │   ├── ratings
+│   │   │   ├── ratings_01.csv
+│   │   │   ├── ratings_02.csv
+│   │   │   ├── ratings_03.csv
+│   │   │   ├── ratings_04.csv
+│   │   │   ├── ratings_05.csv
+│   │   │   ├── ratings_06.csv
+│   │   │   └── ratings_07.csv
+│   │   ├── ratings.csv
+│   │   ├── README.md
+│   │   ├── tags
+│   │   │   ├── tags_01.csv
+│   │   │   ├── tags_02.csv
+│   │   │   └── tags_03.csv
+│   │   └── tags.csv
+│   ├── db_ingestion
+│   │   └── namespace=ingest_test
+│   │       ├── table=links
+│   │       │   ├── links_20251005_batch_id=20251005T160604Z_d9f42978_links_01.csv
+│   │       │   ├── links_20251005_batch_id=20251005T160604Z_d9f42978_links_02.csv
+│   │       │   ├── links_20251005_batch_id=20251005T160604Z_d9f42978_links_03.csv
+│   │       │   ├── links_20251005_batch_id=20251005T160604Z_d9f42978_links_04.csv
+│   │       │   ├── links_20251005_batch_id=20251005T160604Z_d9f42978_links_05.csv
+│   │       │   ├── links_20251005_batch_id=20251005T160604Z_d9f42978_links_06.csv
+│   │       │   └── links_20251005_batch_id=20251005T160604Z_d9f42978_links_07.csv
+│   │       └── table=movies
+│   │           ├── movies_20251006_batch_id=20251006T051828Z_3580b958_movies_01.csv
+│   │           ├── movies_20251006_batch_id=20251006T051828Z_3580b958_movies_02.csv
+│   │           ├── movies_20251006_batch_id=20251006T051828Z_3580b958_movies_03.csv
+│   │           ├── movies_20251006_batch_id=20251006T051828Z_3580b958_movies_04.csv
+│   │           ├── movies_20251006_batch_id=20251006T051828Z_3580b958_movies_05.csv
+│   │           ├── movies_20251006_batch_id=20251006T051828Z_3580b958_movies_06.csv
+│   │           ├── movies_20251006_batch_id=20251006T051828Z_3580b958_movies_07.csv
+│   │           ├── movies_20251006_batch_id=20251006T053113Z_d34c1a45_movies_01.csv
+│   │           ├── movies_20251006_batch_id=20251006T053113Z_d34c1a45_movies_02.csv
+│   │           ├── movies_20251006_batch_id=20251006T053113Z_d34c1a45_movies_03.csv
+│   │           ├── movies_20251006_batch_id=20251006T053113Z_d34c1a45_movies_04.csv
+│   │           ├── movies_20251006_batch_id=20251006T053113Z_d34c1a45_movies_05.csv
+│   │           ├── movies_20251006_batch_id=20251006T053113Z_d34c1a45_movies_06.csv
+│   │           └── movies_20251006_batch_id=20251006T053113Z_d34c1a45_movies_07.csv
+│   ├── landing
+│   │   └── namespace=ingest_test
+│   │       ├── table=links
+│   │       │   └── run_date=20251005
+│   │       │       ├── batch_id=20251005T160356Z_6c8a0df5
+│   │       │       │   ├── manifest.json
+│   │       │       │   └── parts
+│   │       │       │       ├── links_01.csv
+│   │       │       │       ├── links_02.csv
+│   │       │       │       ├── links_03.csv
+│   │       │       │       ├── links_04.csv
+│   │       │       │       ├── links_05.csv
+│   │       │       │       ├── links_06.csv
+│   │       │       │       └── links_07.csv
+│   │       │       ├── batch_id=20251005T160553Z_e62293be
+│   │       │       │   ├── manifest.json
+│   │       │       │   └── parts
+│   │       │       │       ├── links_01.csv
+│   │       │       │       ├── links_02.csv
+│   │       │       │       ├── links_03.csv
+│   │       │       │       ├── links_04.csv
+│   │       │       │       ├── links_05.csv
+│   │       │       │       ├── links_06.csv
+│   │       │       │       └── links_07.csv
+│   │       │       ├── batch_id=20251005T160604Z_d9f42978
+│   │       │       │   ├── manifest.json
+│   │       │       │   └── parts
+│   │       │       │       ├── links_01.csv
+│   │       │       │       ├── links_02.csv
+│   │       │       │       ├── links_03.csv
+│   │       │       │       ├── links_04.csv
+│   │       │       │       ├── links_05.csv
+│   │       │       │       ├── links_06.csv
+│   │       │       │       └── links_07.csv
+│   │       │       └── latest -> batch_id=20251005T160604Z_d9f42978
+│   │       └── table=movies
+│   │           └── run_date=20251006
+│   │               ├── batch_id=20251006T051828Z_3580b958
+│   │               │   ├── manifest.json
+│   │               │   └── parts
+│   │               │       ├── movies_01.csv
+│   │               │       ├── movies_02.csv
+│   │               │       ├── movies_03.csv
+│   │               │       ├── movies_04.csv
+│   │               │       ├── movies_05.csv
+│   │               │       ├── movies_06.csv
+│   │               │       └── movies_07.csv
+│   │               ├── batch_id=20251006T053113Z_d34c1a45
+│   │               │   ├── manifest.json
+│   │               │   └── parts
+│   │               │       ├── movies_01.csv
+│   │               │       ├── movies_02.csv
+│   │               │       ├── movies_03.csv
+│   │               │       ├── movies_04.csv
+│   │               │       ├── movies_05.csv
+│   │               │       ├── movies_06.csv
+│   │               │       └── movies_07.csv
+│   │               └── latest -> batch_id=20251006T053113Z_d34c1a45
+│   ├── manual_drop
+│   │   └── namespace=ingest_test
+│   │       ├── table=links
+│   │       │   ├── links_01.csv
+│   │       │   ├── links_02.csv
+│   │       │   ├── links_03.csv
+│   │       │   ├── links_04.csv
+│   │       │   ├── links_05.csv
+│   │       │   ├── links_06.csv
+│   │       │   └── links_07.csv
+│   │       ├── table=movies
+│   │       │   ├── movies_01.csv
+│   │       │   ├── movies_02.csv
+│   │       │   ├── movies_03.csv
+│   │       │   ├── movies_04.csv
+│   │       │   ├── movies_05.csv
+│   │       │   ├── movies_06.csv
+│   │       │   └── movies_07.csv
+│   │       ├── table=ratings
+│   │       │   ├── ratings_01.csv
+│   │       │   ├── ratings_02.csv
+│   │       │   ├── ratings_03.csv
+│   │       │   ├── ratings_04.csv
+│   │       │   ├── ratings_05.csv
+│   │       │   ├── ratings_06.csv
+│   │       │   └── ratings_07.csv
+│   │       └── table=tags
+│   │           ├── tags_01.csv
+│   │           ├── tags_02.csv
+│   │           └── tags_03.csv
+│   └── parquet
+│       └── 20251006
+│           ├── links.parquet
+│           └── movies.parquet
+├── data_source
+│   └── adventure_works
+│       ├── date
+│       │   ├── date.csv
+│       │   └── date.yml
+│       ├── persion
+│       │   ├── address.csv
+│       │   ├── address.yml
+│       │   ├── countryregion.csv
+│       │   ├── countryregion.yml
+│       │   ├── person.csv
+│       │   ├── person.yml
+│       │   ├── stateprovince.csv
+│       │   └── stateprovince.yml
+│       ├── production
+│       │   ├── product.csv
+│       │   ├── product.yml
+│       │   ├── productcategory.csv
+│       │   ├── productcategory.yml
+│       │   ├── productsubcategory.csv
+│       │   └── productsubcategory.yml
+│       └── sales
+│           ├── creditcard.csv
+│           ├── creditcard.yml
+│           ├── customer.csv
+│           ├── customer.yml
+│           ├── salesorderdetail.csv
+│           ├── salesorderdetail.yml
+│           ├── salesorderheader.csv
+│           ├── salesorderheader.yml
+│           ├── salesorderheadersalesreason.csv
+│           ├── salesorderheadersalesreason.yml
+│           ├── salesreason.csv
+│           ├── salesreason.yml
+│           ├── store.csv
+│           └── store.yml
+├── docker-compose.dev.yml
+├── docker-compose.yml
+├── docs
+│   ├── dbt_tutorial
+│   │   ├── dbt-dimensional-modelling.drawio
+│   │   ├── img
+│   │   │   ├── 3nf-to-dimensional-model.png
+│   │   │   ├── conversation.png
+│   │   │   ├── data-modelling.png
+│   │   │   ├── dbt-dag.png
+│   │   │   ├── dimension-tables.png
+│   │   │   ├── fct_sales.png
+│   │   │   ├── logo.png
+│   │   │   ├── sales-order-header-detail.png
+│   │   │   ├── snowflake-schema.png
+│   │   │   ├── source-schema.png
+│   │   │   ├── star-schema.png
+│   │   │   └── target-schema.png
+│   │   ├── part01-setup-dbt-project.md
+│   │   ├── part02-identify-business-process.md
+│   │   ├── part03-identify-fact-dimension.md
+│   │   ├── part04-create-dimension.md
+│   │   ├── part05-create-fact.md
+│   │   ├── part06-document-model.md
+│   │   └── part07-consume-model.md
+│   ├── docker
+│   │   └── superset_init.md
+│   └── ingestion
+│       ├── csv_to_db_information.md
+│       └── playwright.md
+├── file_describe
+├── file_describe_all_files.txt
+├── file_describe.txt
+├── hello_world_ingestion.py
+├── hello_world.sql
+├── ingestion
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   └── utils.cpython-312.pyc
+│   ├── config
+│   │   └── tables.yml
+│   ├── fetchers
+│   │   ├── api-request
+│   │   │   ├── api_request.py
+│   │   │   └── insert_records.py
+│   │   └── playwright_sample.py
+│   ├── logs
+│   │   ├── ingest_links.log
+│   │   ├── ingest.log
+│   │   ├── land_import_links.log
+│   │   ├── land_import_movies.log
+│   │   ├── promote_links.log
+│   │   ├── promote_movies.log
+│   │   ├── snapshot.log
+│   │   └── validate.log
+│   ├── pipelines
+│   │   ├── __pycache__
+│   │   │   ├── csv_to_db.cpython-312.pyc
+│   │   │   ├── land_import.cpython-312.pyc
+│   │   │   ├── promote.cpython-312.pyc
+│   │   │   └── validate.cpython-312.pyc
+│   │   ├── clean_landing.py
+│   │   ├── csv_to_db.py
+│   │   ├── ingest_flow.py
+│   │   ├── land_import.py
+│   │   ├── promote.py
+│   │   └── validate.py
+│   └── utils.py
+├── LICENSE
+├── main.py
+├── Makefile
+├── memo.ipynb
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+├── superset
+│   ├── Dockerfile.superset
+│   └── superset_config.py
+└── supervisord.log
 
-15 directories, 63 files
+60 directories, 220 files

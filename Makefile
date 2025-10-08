@@ -1,19 +1,7 @@
 
-.PHONY: ingestion-sales
-ingestion-sales:
-	python ingestion/csv_to_db.py \
-	--host db \
-	--data-root raw_data/ \
-	--table sales_order_detail \
-	--schema test_ingest \
-	--create \
-	--truncate \
-	--mode upsert \
-	--pk salesorderdetailid
-
 describe-docker:
 	echo "===Project Directory Structure===\n" > file_describe.txt
-	tree -a -I "file_describe.txt|Makefile|.git|.gitignore|.vscode|adventureworks|data|raw_data|docs|memo.md|note|supervisord.pid|test.py|backup" >> file_describe.txt
+	tree -a -I "file_describe.txt|Makefile|.git|.gitignore|.vscode|adventureworks|data|raw_data|data_source|docs|memo.md|note|supervisord.pid|test.py|backup" >> file_describe.txt
 
 	echo "\n\n\n=== .devcontainer/devcontainer.json===\n" >> file_describe.txt
 	cat .devcontainer/devcontainer.json >> file_describe.txt
@@ -201,9 +189,61 @@ clean-landing: | $(LOGDIR)
 .PHONY: all
 all: validate ingest snapshot
 
+# ===== Replay (landing -> db_ingestion -> upsert) =====
+REPLAY := ingestion/pipelines/replay.py
+
+# 全ての namespace/table を landing から再生（時系列コピー→UPSERT）。最後に snapshot も出す
+replay-all:
+	$(PYTHON) -m ingestion.pipelines.replay --snapshot | tee -a ingestion/logs/replay_all.log
+
+# 指定 namespace / table を再生（最新まで）。--since を付けるとその日付以降のみ
+# 例: make replay-table NAMESPACE=ingest_test TABLE=movies
+# 例: make replay-table NAMESPACE=ingest_test TABLE=movies SINCE=20240901
+replay-table:
+	$(PYTHON) -m ingestion.pipelines.replay \
+		$(if $(NAMESPACE),--namespace "$(NAMESPACE)",) \
+		$(if $(TABLE),--table "$(TABLE)",) \
+		$(if $(SINCE),--since "$(SINCE)",) \
+		--snapshot | tee -a ingestion/logs/replay_$(TABLE).log
+
+
 
 csv_demo_to_manual_drop:
 	cp data/csvs_demo/links/* data/manual_drop/namespace=ingest_test/table=links
 	cp data/csvs_demo/movies/* data/manual_drop/namespace=ingest_test/table=movies
 	cp data/csvs_demo/ratings/* data/manual_drop/namespace=ingest_test/table=ratings
 	cp data/csvs_demo/tags/* data/manual_drop/namespace=ingest_test/table=tags
+
+###################
+### docker 関連
+###################
+SHELL := /bin/bash
+COMPOSE := docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml
+SPS := /app/.venv/bin/superset
+
+.PHONY: docker-superset-init
+docker-superset-init:
+	@$(COMPOSE) up -d db redis
+	@$(COMPOSE) exec db bash -lc " \
+	  until pg_isready -U \"$$POSTGRES_USER\" -h 127.0.0.1 -p $${POSTGRES_PORT:-5432}; do \
+	    echo 'waiting for postgres...'; sleep 1; \
+	  done; \
+	  psql -U \"$$POSTGRES_USER\" -h 127.0.0.1 -p $${POSTGRES_PORT:-5432} -d postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='superset'\" \
+	    | grep -q 1 \
+	    || psql -U \"$$POSTGRES_USER\" -h 127.0.0.1 -p $${POSTGRES_PORT:-5432} -d postgres -c \"CREATE DATABASE superset;\" \
+	"
+	@$(COMPOSE) up -d superset
+	@$(COMPOSE) exec superset bash -lc "$(SPS) db upgrade"
+	@$(COMPOSE) exec superset bash -lc " \
+	  $(SPS) fab create-admin \
+	    --username \"$$SUPERSET_ADMIN_USERNAME\" \
+	    --firstname \"$$SUPERSET_ADMIN_FIRST_NAME\" \
+	    --lastname  \"$$SUPERSET_ADMIN_LAST_NAME\" \
+	    --email     \"$$SUPERSET_ADMIN_EMAIL\" \
+	    --password  \"$$SUPERSET_ADMIN_PASSWORD\" || true \
+	"
+	@$(COMPOSE) exec superset bash -lc "$(SPS) init"
+
+
+docker-start:
+	docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml start -d db redis 

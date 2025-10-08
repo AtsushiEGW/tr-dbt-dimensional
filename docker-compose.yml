@@ -1,13 +1,14 @@
 name: tr-dbt-dimensional
+
 services:
   app:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
+      target: app           # ★ 本番は最小イメージ
       args:
         USER_UID: ${LOCAL_UID:-1000}
         USER_GID: ${LOCAL_GID:-1000}
-        ENABLE_GUI: "false"
     env_file:
       - ./.env
     working_dir: /workspace/project
@@ -15,6 +16,7 @@ services:
       - db
     networks:
       - metanet1
+    # 本番では GUI/NoVNC は使わない → ports/expose は不要
 
   db:
     image: postgres:16
@@ -24,7 +26,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"   # 本番では外すのが安全
+      - "5432:5432"   # 本番で不要なら外す
     networks:
       - metanet1
     healthcheck:
@@ -45,14 +47,14 @@ services:
       MB_DB_DBNAME: ${POSTGRES_DB}
       MB_DB_HOST: db
       MB_DB_PORT: ${POSTGRES_PORT:-5432}
-      MB_DB_USER: ${POSTGRES_USER:-metabase_user}
-      MB_DB_PASS: ${POSTGRES_PASSWORD:-change_me}
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
     networks:
       - metanet1
     ports:
       - "3000:3000"
 
-  # ===== 追加：Redis =====
+  # Redis
   redis:
     image: redis:7-alpine
     restart: always
@@ -64,7 +66,7 @@ services:
       timeout: 3s
       retries: 30
 
-  # ===== Superset (Web) =====
+  # Superset（Web）
   superset:
     build:
       context: ./superset
@@ -94,7 +96,7 @@ services:
       - "8088:8088"
     command: ["/bin/bash", "-c", "gunicorn -w 4 -k gevent --timeout 60 -b 0.0.0.0:8088 'superset.app:create_app()'"]
 
-  # ===== 追加：Celery Worker =====
+  # Celery Worker
   superset-worker:
     image: local/superset:celery
     restart: always
@@ -120,7 +122,7 @@ services:
       - metanet1
     command: ["celery", "--app=superset.tasks.celery_app:app", "worker", "--pool=prefork", "-O", "fair", "-c", "4"]
 
-  # ===== 追加：Celery Beat (RedBeat) =====
+  # Celery Beat
   superset-beat:
     image: local/superset:celery
     restart: always

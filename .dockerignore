@@ -1,10 +1,37 @@
+# VCS / compose
 .git
 docker-compose*.yml
+
+# DB / state
 pgdata
+superset_home
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Env / secrets
 .env
 .env.*
+!.env.template
+.venv/
+
+# Output / caches / notebooks
 .output/
 dist/
+build/
+.ipynb_checkpoints/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.pytest_cache/
+
+# Node
 node_modules/
+
+# Data / logs (必要に応じて調整)
+data/
+logs/
+ingestion/logs/

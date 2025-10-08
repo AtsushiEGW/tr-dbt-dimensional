@@ -1,22 +1,25 @@
+
 services:
   app:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
+      target: app-gui                 # ★ 開発は GUI 付きターゲット
       args:
         USER_UID: ${LOCAL_UID:-1000}
         USER_GID: ${LOCAL_GID:-1000}
-        ENABLE_GUI: "true"
         NOVNC_PASSWORD: ${NOVNC_PASSWORD}
+        INSTALL_PLAYWRIGHT: "true"     # Playwright ブラウザが必要な場合のみ
     env_file:
       - .env
     volumes:
       - ./:/workspace/project:cached
-    expose:
-      - "6080"
+      - ${HOME}/.config:/home/dev/.config
+    ports:
+      - "6080:6080"
     environment:
       - DISPLAY=:99
-    command: ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+    command: ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]
 
   db:
     ports:

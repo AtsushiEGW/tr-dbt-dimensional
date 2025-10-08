@@ -1,914 +1,454 @@
 ===Project Directory Structure===
 
 .
+├── .devcontainer
+│   ├── devcontainer.json
+│   ├── Dockerfile
+│   └── supervisord.conf
+├── .dockerignore
+├── .env
+├── .env.prod
+├── .env.template
+├── .sqlfluff
+├── .sqlfluffignore
+├── docker-compose.dev.yml
+├── docker-compose.yml
+├── file_describe
+├── file_describe_all_files.txt
+├── hello_world_ingestion.py
+├── hello_world.sql
+├── ingestion
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   └── utils.cpython-312.pyc
+│   ├── config
+│   │   └── tables.yml
+│   ├── fetchers
+│   │   ├── api-request
+│   │   │   ├── api_request.py
+│   │   │   └── insert_records.py
+│   │   └── playwright_sample.py
+│   ├── logs
+│   │   ├── ingest_links.log
+│   │   ├── ingest.log
+│   │   ├── land_import_links.log
+│   │   ├── land_import_movies.log
+│   │   ├── promote_links.log
+│   │   ├── promote_movies.log
+│   │   ├── snapshot.log
+│   │   └── validate.log
+│   ├── pipelines
+│   │   ├── __pycache__
+│   │   │   ├── csv_to_db.cpython-312.pyc
+│   │   │   ├── land_import.cpython-312.pyc
+│   │   │   ├── promote.cpython-312.pyc
+│   │   │   └── validate.cpython-312.pyc
+│   │   ├── clean_landing.py
+│   │   ├── csv_to_db.py
+│   │   ├── ingest_flow.py
+│   │   ├── land_import.py
+│   │   ├── promote.py
+│   │   └── validate.py
+│   └── utils.py
+├── LICENSE
+├── main.py
+├── memo.ipynb
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+├── superset
+│   ├── Dockerfile.superset
+│   └── superset_config.py
+└── supervisord.log
 
-0 directories, 0 files
+12 directories, 49 files
 
 
 
-=== ingestion/config/tables.yml ===
+=== .devcontainer/devcontainer.json===
 
-defaults:
-  encoding: utf-8
-  chunksize: 200000
-  filename_glob: "*.csv"
+{
+  "name": "dimensional modeling container",
+  "dockerComposeFile": [
+    "../docker-compose.yml",
+    "../docker-compose.dev.yml"
+  ],
+  "service": "app",
+  "runServices": ["app"],
+  "workspaceFolder": "/workspace/project",
+  "shutdownAction": "none",
+  "overrideCommand": false,
 
-tables:
-  links:
-    folder: namespace=ingest_test/table=links
-    primary_key: ["movieId"]
+  "mounts": [
+    "source=${localEnv:HOME}/.dotfiles,target=/home/dev/.dotfiles,type=bind,consistency=cached,readonly"
+  ],
+  "postCreateCommand": "bash -lc 'chmod +x /home/dev/.dotfiles/bootstrap.sh || true; DOTFILES=/home/dev/.dotfiles /home/dev/.dotfiles/bootstrap.sh || true'",
 
-  movies:
-    folder: namespace=ingest_test/table=movies
-    primary_key: ["movieId"]
+  "forwardPorts": [5432, 3000, 6080, 8088],
+  "remoteUser": "dev",
 
-  ratings:
-    folder: namespace=ingest_test/table=ratings
-    primary_key: ["userId", "movieId"]
-
-  tags:
-    folder: namespace=ingest_test/table=tags
-    primary_key: ["userId", "movieId", "timestamp"]
-    
-
-
-=== ingestion/utils.py ===
-
-from __future__ import annotations
-
-import os
-import secrets
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable
-
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
-
-
-# ---------------------------
-# ENV & PATHS
-# ---------------------------
-
-def get_env(name: str, default: str | os.PathLike[str] | None = None) -> str:
-    """環境変数取得。default が Path の場合は str 化。未設定かつ default なしはエラー。"""
-    v = os.getenv(name, default if default is None else str(default))
-    if v is None:
-        raise RuntimeError(f"Environment variable {name} is required.")
-    return v
-
-
-def get_paths() -> dict[str, Path]:
-    """主要ディレクトリ（CSV, PARQUET, ARCHIVE, LANDING）を Path で返す。"""
-    data_dir = Path(get_env("DATA_DIR", "./data"))
-    return {
-        "CSV_ROOT": Path(get_env("CSV_ROOT", data_dir / "db_ingestion")),
-        "PARQUET_ROOT": Path(get_env("PARQUET_ROOT", data_dir / "parquet")),
-        "ARCHIVE_ROOT": Path(get_env("ARCHIVE_ROOT", data_dir / "archive")),
-        "LANDING_ROOT": Path(get_env("LANDING_ROOT", data_dir / "landing")),
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-keymap",
+        "ms-toolsai.jupyter-renderers",
+        "ms-toolsai.vscode-jupyter-cell-tags"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.analysis.typeCheckingMode": "basic",
+        "python.analysis.autoSearchPaths": true,
+        "python.analysis.useLibraryCodeForTypes": true,
+        "python.formatting.provider": "black",
+        "editor.formatOnSave": true,
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      }
     }
-
-
-def today_stamp() -> str:
-    return datetime.now().strftime("%Y%m%d")
-
-
-def new_batch_id() -> str:
-    """辞書順=時系列になるバッチID（UTC時刻 + 8hex）。"""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    rand = secrets.token_hex(4)
-    return f"{ts}_{rand}"
-
-
-def landing_batch_dir(root: Path, namespace: str, table: str, run_date: str, batch_id: str) -> Path:
-    """landing の 4階層パスを生成。"""
-    return root / f"namespace={namespace}" / f"table={table}" / f"run_date={run_date}" / f"batch_id={batch_id}"
-
-
-# ---------------------------
-# DB ENGINE & DDL
-# ---------------------------
-
-def get_engine() -> Engine:
-    """
-    SQLAlchemy Engine。pool_pre_ping=True で接続切れを自動検出。
-    """
-    host = get_env("POSTGRES_HOST", "localhost")
-    port = get_env("POSTGRES_PORT", "5432")
-    user = get_env("POSTGRES_USER", "postgres")
-    password = get_env("POSTGRES_PASSWORD", "")
-    db = get_env("POSTGRES_DB", "postgres")
-    url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db}"
-    return create_engine(url, pool_pre_ping=True, future=True)
-
-
-def ensure_schema(engine: Engine, schema: str):
-    with engine.begin() as conn:
-        conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
-
-
-def table_exists(engine: Engine, schema: str, table: str) -> bool:
-    sql = """
-    SELECT 1
-    FROM information_schema.tables
-    WHERE table_schema = :schema AND table_name = :table
-    """
-    with engine.connect() as conn:
-        return conn.execute(text(sql), {"schema": schema, "table": table}).scalar() is not None
-
-
-def get_table_columns(engine: Engine, schema: str, table: str) -> list[str]:
-    sql = """
-    SELECT column_name
-    FROM information_schema.columns
-    WHERE table_schema = :schema AND table_name = :table
-    ORDER BY ordinal_position
-    """
-    with engine.connect() as conn:
-        return list(conn.execute(text(sql), {"schema": schema, "table": table}).scalars().all())
-
-
-def create_text_table(engine: Engine, schema: str, table: str, columns: list[str], pk_cols: list[str]):
-    """すべて TEXT 列 + 主キーで作成（存在しない場合）。"""
-    cols_sql = ", ".join([f'"{c}" TEXT' for c in columns])
-    pk_sql = f", PRIMARY KEY ({', '.join([f'\"{c}\"' for c in pk_cols])})" if pk_cols else ""
-    ddl = f'CREATE TABLE IF NOT EXISTS "{schema}"."{table}" ({cols_sql}{pk_sql});'
-    with engine.begin() as conn:
-        conn.execute(text(ddl))
-
-
-def add_missing_text_columns(engine: Engine, schema: str, table: str, missing_cols: list[str]):
-    if not missing_cols:
-        return
-    with engine.begin() as conn:
-        for c in missing_cols:
-            conn.execute(text(f'ALTER TABLE "{schema}"."{table}" ADD COLUMN IF NOT EXISTS "{c}" TEXT'))
-
-
-=== ingestion/pipelines/clean_landing.py ===
-
-from __future__ import annotations
-
-import gzip
-import os
-import shutil
-from datetime import datetime, timedelta
-from pathlib import Path
-
-from ingestion.utils import get_paths
-
-
-def _parse_run_date(dirpath: Path) -> datetime | None:
-    # .../run_date=YYYYMMDD/
-    for part in reversed(dirpath.parts):
-        if part.startswith("run_date="):
-            try:
-                return datetime.strptime(part.split("=", 1)[1], "%Y%m%d")
-            except ValueError:
-                return None
-    return None
-
-
-def _compress_csv_in_parts(parts_dir: Path):
-    for csv in list(parts_dir.glob("*.csv")):
-        gz = csv.with_suffix(csv.suffix + ".gz")  # .csv.gz
-        if gz.exists():
-            continue
-        with csv.open("rb") as src, gzip.open(gz, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        csv.unlink()
-        print(f"[landing-clean] compressed: {csv.name} -> {gz.name}")
-
-
-def clean_landing():
-    paths = get_paths()
-    landing = paths["LANDING_ROOT"]
-
-    retention_days = int(os.getenv("LANDING_RETENTION_DAYS", "90"))
-    compress_after_days = int(os.getenv("LANDING_COMPRESS_AFTER_DAYS", "60"))
-    keep_per_namespace = int(os.getenv("LANDING_KEEP_PER_NAMESPACE", "3"))
-
-    now = datetime.now()
-    cutoff_delete = now - timedelta(days=retention_days)
-    cutoff_compress = now - timedelta(days=compress_after_days)
-
-    # namespace/table ごとに直近 keep_per_namespace を保護
-    groups: dict[str, list[Path]] = {}
-    for batch in landing.rglob("batch_id=*"):
-        if not batch.is_dir():
-            continue
-        ns = "<unknown>"
-        tbl = "<unknown>"
-        for part in batch.parts:
-            if part.startswith("namespace="):
-                ns = part.split("=", 1)[1]
-            if part.startswith("table="):
-                tbl = part.split("=", 1)[1]
-        key = f"{ns}/{tbl}"
-        groups.setdefault(key, []).append(batch)
-
-    for key, batches in groups.items():
-        batches.sort(key=lambda p: str(p))  # batch_id 命名が時系列ソート前提
-        protected = set(batches[-keep_per_namespace:]) if keep_per_namespace > 0 else set()
-
-        for b in batches:
-            run_dt = _parse_run_date(b)
-            if run_dt is None:
-                print(f"[landing-clean] skip (no run_date): {b}")
-                continue
-
-            parts_dir = b / "parts"
-            if parts_dir.exists() and run_dt < cutoff_compress:
-                _compress_csv_in_parts(parts_dir)
-
-            if b in protected:
-                print(f"[landing-clean] protect latest: {b}")
-                continue
-
-            if run_dt < cutoff_delete:
-                shutil.rmtree(b)
-                print(f"[landing-clean] deleted: {b}")
-
-
-if __name__ == "__main__":
-    clean_landing()
-
-
-=== ingestion/pipelines/csv_to_db.py ===
-
-from __future__ import annotations
-
-import argparse
-import io
-import os
-import sys
-import shutil
-from datetime import datetime, timedelta
-from pathlib import Path
-
-import pandas as pd
-import yaml
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
-
-from ingestion.utils import (
-    get_engine, ensure_schema, get_paths, today_stamp,
-    table_exists, get_table_columns, create_text_table, add_missing_text_columns
-)
-
-# ---------------------------
-# Paths / Config
-# ---------------------------
-HERE: Path = Path(__file__).parent
-CFG_PATH: Path = HERE.parent / "config" / "tables.yml"   # ingestion/config/tables.yml
-TARGET_SCHEMA = os.getenv("TARGET_SCHEMA", "raw")
-PATHS = get_paths()  # dict[str, Path]
-
-
-# ---------------------------
-# Config loader (defaults merge)
-# ---------------------------
-def load_config() -> dict:
-    with CFG_PATH.open("r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    if "tables" not in cfg:
-        raise ValueError("config must contain 'tables'")
-    defaults = cfg.get("defaults", {})
-    merged_tables = {}
-    for name, spec in cfg["tables"].items():
-        merged_tables[name] = (defaults | spec)  # 3.12: dict merge
-    cfg["tables"] = merged_tables
-    return cfg
-
-
-# ---------------------------
-# Helpers: files & headers
-# ---------------------------
-def _iter_csv_files(folder_root: Path, folder: str, pattern: str) -> list[Path]:
-    """folder_root/folder 配下で pattern にマッチする CSV を昇順列挙"""
-    base = folder_root / folder
-    if not base.exists():
-        print(f"[warn] base folder not found: {base}")
-        return []
-    return sorted(base.glob(pattern), key=lambda p: str(p))
-
-
-def _read_header_raw(path: Path, encoding: str) -> list[str]:
-    """pandas に任せず、1行目を生で読む（重複ヘッダをそのまま取得）"""
-    import csv
-    with path.open("r", encoding=encoding, newline="") as f:
-        reader = csv.reader(f)
-        try:
-            return next(reader)
-        except StopIteration:
-            return []
-
-
-def _analyze_headers(files: list[Path], encoding: str) -> tuple[list[str], dict[Path, list[str]]]:
-    """
-    全ファイルのヘッダを解析し、
-      - union_cols: 和集合（各ベース名の最大多重度だけ xxx_1..xxx_k を並べる / 最初の出現順）
-      - norm_by_file: 各ファイルでの “正規化済みヘッダ名” を返す
-    """
-    if not files:
-        return [], {}
-    order: list[str] = []
-    seen: set[str] = set()
-    max_mult: dict[str, int] = {}
-    per_file_raw: dict[Path, list[str]] = {}
-
-    for f in files:
-        hdr = _read_header_raw(f, encoding=encoding)
-        per_file_raw[f] = hdr
-        counts: dict[str, int] = {}
-        for col in hdr:
-            counts[col] = counts.get(col, 0) + 1
-            if col not in seen:
-                seen.add(col)
-                order.append(col)
-        for col, c in counts.items():
-            if c > max_mult.get(col, 0):
-                max_mult[col] = c
-
-    union_cols: list[str] = []
-    for base in order:
-        k = max_mult[base]
-        if k == 1:
-            union_cols.append(base)
-        else:
-            union_cols.extend([f"{base}_{i}" for i in range(1, k + 1)])
-
-    norm_by_file: dict[Path, list[str]] = {}
-    for f, hdr in per_file_raw.items():
-        counters: dict[str, int] = {}
-        norm: list[str] = []
-        for col in hdr:
-            counters[col] = counters.get(col, 0) + 1
-            cnt = counters[col]
-            if max_mult[col] == 1:
-                norm.append(col)
-            else:
-                norm.append(f"{col}_{cnt}")
-        norm_by_file[f] = norm
-
-    return union_cols, norm_by_file
-
-
-# ---------------------------
-# COPY
-# ---------------------------
-def _copy_df_to_table(engine: Engine, df: pd.DataFrame, table_fqtn: str, columns: list[str]):
-    """
-    DataFrame -> COPY FROM STDIN (CSV)。
-    欠損は空文字にして CSV 化し、COPY 側の NULL '' により本物の NULL へ。
-    """
-    if df.empty:
-        return
-    df2 = df.reindex(columns=columns)
-    df2 = df2.where(pd.notna(df2), "")  # NaN -> ""
-
-    buf = io.StringIO()
-    df2.to_csv(buf, index=False, header=False)
-    buf.seek(0)
-
-    raw_conn = engine.raw_connection()
-    try:
-        cur = raw_conn.cursor()  # context manager 非対応のため with にしない
-        try:
-            cols_sql = ", ".join([f'"{c}"' for c in columns])
-            cur.copy_expert(
-                sql=f'COPY {table_fqtn} ({cols_sql}) FROM STDIN WITH (FORMAT CSV, NULL \'\')',
-                file=buf,
-            )
-        finally:
-            cur.close()
-        raw_conn.commit()
-    finally:
-        raw_conn.close()
-
-
-# ---------------------------
-# TEMP TABLE
-# ---------------------------
-def _make_temp_text_table(engine: Engine, columns: list[str]) -> str:
-    """TEXT 列の TEMP TABLE を作成して FQTN (pg_temp.<name>) を返す。"""
-    temp_name = f"stg_{int(datetime.now().timestamp())}_{os.getpid()}"
-    temp_fqtn = f"pg_temp.{temp_name}"
-    cols_sql = ", ".join([f'"{c}" TEXT' for c in columns])
-    with engine.begin() as conn:
-        conn.execute(text(f'CREATE TEMP TABLE {temp_fqtn} ({cols_sql});'))
-    return temp_fqtn
-
-
-# ---------------------------
-# UPSERT
-# ---------------------------
-def upsert_table(
-    engine: Engine,
-    table_name: str,
-    cfg: dict,
-    csv_root: Path,
-    chunksize: int,
-    auto_add_columns: bool,
-):
-    folder = cfg["folder"]
-    pattern = cfg.get("filename_glob", "*.csv")
-    pk_cols = cfg["primary_key"]
-    encoding = cfg.get("encoding", "utf-8")
-
-    schema = TARGET_SCHEMA
-    target_base = cfg.get("target_table", table_name)
-    target_fqtn = f'"{schema}"."{target_base}"'
-
-    files = _iter_csv_files(csv_root, folder, pattern)
-    if not files:
-        print(f"[{table_name}] No CSV files under {(csv_root / folder)}")
-        return
-
-    # ヘッダ解析（重複正規化 + 和集合）
-    union_cols, norm_by_file = _analyze_headers(files, encoding=encoding)
-    if not union_cols:
-        print(f"[{table_name}] WARNING: header not found")
-        return
-
-    # 取り込み先テーブルを準備
-    if not table_exists(engine, schema, target_base):
-        create_text_table(engine, schema, target_base, union_cols, pk_cols)
-        db_columns = union_cols[:]
-    else:
-        db_columns = get_table_columns(engine, schema, target_base)
-        missing = [c for c in union_cols if c not in db_columns]
-        if missing:
-            if auto_add_columns:
-                add_missing_text_columns(engine, schema, target_base, missing)
-                db_columns = get_table_columns(engine, schema, target_base)
-                print(f'[{table_name}] Added new columns: {", ".join(missing)}')
-            else:
-                print(f'[{table_name}] WARNING: New columns ignored (use --auto-add-columns): {", ".join(missing)}')
-
-    # TEMP TABLE（DB列に合わせる）
-    temp_fqtn = _make_temp_text_table(engine, db_columns)
-
-    # 読み込み & COPY
-    for f in files:
-        print(f"[{table_name}] Loading {f}")
-        norm_cols = norm_by_file[f]
-        for chunk in pd.read_csv(
-            f,
-            header=0,
-            names=norm_cols,
-            mangle_dupe_cols=False,     # こちらで一意化済み
-            dtype=str,
-            chunksize=chunksize,
-            na_filter=True,
-            keep_default_na=False,
-            na_values=[""],             # 空欄のみ欠損 → COPYでNULL
-            encoding=encoding,
-        ):
-            # DB列に合わせて整形：欠け列は欠損、余分は落とす
-            for c in db_columns:
-                if c not in chunk.columns:
-                    chunk[c] = pd.NA
-            chunk = chunk[db_columns]
-            _copy_df_to_table(engine, chunk, temp_fqtn, db_columns)
-
-    # UPSERT 実行
-    non_key_cols = [c for c in db_columns if c not in pk_cols]
-    set_clause = (
-        "SET " + ", ".join([f'"{c}"=EXCLUDED."{c}"' for c in non_key_cols])
-        if non_key_cols else "DO NOTHING"
-    )
-    upsert_sql = f"""
-        INSERT INTO {target_fqtn} ({", ".join([f'"{c}"' for c in db_columns])})
-        SELECT {", ".join([f'"{c}"' for c in db_columns])} FROM {temp_fqtn}
-        ON CONFLICT ({", ".join([f'"{c}"' for c in pk_cols])})
-        DO UPDATE {set_clause};
-    """
-    with engine.begin() as conn:
-        conn.execute(text(upsert_sql))
-
-    print(f"[{table_name}] Upsert completed.")
-
-
-# ---------------------------
-# SNAPSHOT (Parquet)
-# ---------------------------
-def snapshot_table_to_parquet(engine: Engine, table_name: str, out_root: Path):
-    schema = TARGET_SCHEMA
-    fqtn = f'"{schema}"."{table_name}"'
-    date_folder = out_root / datetime.now().strftime("%Y%m%d")
-    date_folder.mkdir(parents=True, exist_ok=True)
-    out_path = date_folder / f"{table_name}.parquet"
-
-    print(f"[snapshot] {fqtn} -> {out_path}")
-    with engine.connect() as conn:
-        df = pd.read_sql(f"SELECT * FROM {fqtn}", conn)
-    df.to_parquet(out_path, index=False)
-    print(f"[snapshot] Wrote {out_path}")
-
-
-# ---------------------------
-# CLEAN CSVs (db_ingestion 配下)
-# ---------------------------
-def clean_old_csvs(csv_root: Path, archive_root: Path | None, retention_days: int, dry_run: bool = True):
-    cutoff = datetime.now() - timedelta(days=retention_days)
-    total = 0
-    for table_folder in csv_root.rglob("*"):
-        if not table_folder.is_dir():
-            continue
-        for f in table_folder.glob("*.csv"):
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
-            if mtime < cutoff:
-                total += 1
-                if dry_run:
-                    print(f"[dry-run] remove {f}")
-                else:
-                    if archive_root:
-                        dest = archive_root / f.relative_to(csv_root)
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(f), str(dest))
-                        print(f"[moved] {f} -> {dest}")
-                    else:
-                        f.unlink()
-                        print(f"[removed] {f}")
-    print(f"[clean] targets={total}, dry_run={dry_run}")
-
-
-# ---------------------------
-# CLI
-# ---------------------------
-def cmd_ingest(args):
-    engine = get_engine()
-    ensure_schema(engine, TARGET_SCHEMA)
-    cfg = load_config()
-    tables = cfg["tables"]
-
-    targets = [args.table] if args.table else list(tables.keys())
-    for name in targets:
-        if name not in tables:
-            print(f"Unknown table '{name}'. Available: {', '.join(tables.keys())}")
-            sys.exit(1)
-        spec = tables[name]
-        upsert_table(
-            engine=engine,
-            table_name=name,
-            cfg=spec,
-            csv_root=PATHS["CSV_ROOT"],
-            chunksize=spec.get("chunksize", args.chunksize),
-            auto_add_columns=args.auto_add_columns,
-        )
-
-
-def cmd_snapshot(args):
-    engine = get_engine()
-    cfg = load_config()
-    targets = [args.table] if args.table else list(cfg["tables"].keys())
-    for name in targets:
-        spec = cfg["tables"][name]
-        snapshot_table_to_parquet(engine, spec.get("target_table", name), PATHS["PARQUET_ROOT"])
-
-
-def cmd_clean(args):
-    days = int(os.getenv("RETENTION_DAYS", "60"))
-    archive = PATHS["ARCHIVE_ROOT"] if args.archive else None
-    clean_old_csvs(PATHS["CSV_ROOT"], archive, days, dry_run=args.dry_run)
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        prog="csv_to_db",
-        description="CSV ingestion -> Postgres upsert (TEXT + NULL blanks) -> Parquet snapshot",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    p_ing = sub.add_parser("ingest", help="ingest CSVs and UPSERT into Postgres (raw TEXT)")
-    p_ing.add_argument("--table", help="single table to ingest (default: all)")
-    p_ing.add_argument("--chunksize", type=int, default=200_000, help="pandas read_csv chunksize (fallback)")
-    p_ing.add_argument("--auto-add-columns", action="store_true",
-                       help="if CSV has new columns, ALTER TABLE ADD COLUMN (TEXT)")
-    p_ing.set_defaults(func=cmd_ingest)
-
-    p_snap = sub.add_parser("snapshot", help="export tables from Postgres to Parquet")
-    p_snap.add_argument("--table", help="single table to snapshot (default: all)")
-    p_snap.set_defaults(func=cmd_snapshot)
-
-    p_clean = sub.add_parser("clean", help="delete or archive old CSV files under db_ingestion")
-    p_clean.add_argument("--archive", action="store_true", help="move files to archive instead of deleting")
-    p_clean.add_argument("--dry-run", action="store_true", help="only print targets")
-    p_clean.set_defaults(func=cmd_clean)
-
-    args = parser.parse_args()
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()
-
-
-=== ingestion/pipelines/land_import.py ===
-
-from __future__ import annotations
-
-import argparse
-import hashlib
-import json
-import shutil
-from datetime import datetime, timezone
-from pathlib import Path
-
-from ingestion.utils import get_paths, today_stamp, new_batch_id, landing_batch_dir
-
-
-def _iter_files(src: Path, pattern: str) -> list[Path]:
-    if not src.exists():
-        raise FileNotFoundError(f"src not found: {src}")
-    files = sorted(list(src.glob(pattern)), key=lambda p: str(p))
-    return [p for p in files if p.is_file()]
-
-
-def _md5(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    h = hashlib.md5()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(chunk_size), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _count_rows_csv(path: Path, encoding: str = "utf-8") -> int:
-    # ヘッダ1行 + データ行N → データ行だけ数える
-    try:
-        with path.open("r", encoding=encoding, newline="") as f:
-            first = f.readline()
-            if first == "":
-                return 0
-            return sum(1 for _ in f)
-    except UnicodeDecodeError:
-        with path.open("rb") as f:
-            return max(0, sum(1 for _ in f) - 1)
-
-
-def import_manual(
-    src: Path,
-    namespace: str,
-    table: str,
-    run_date: str | None,
-    encoding: str,
-    pattern: str,
-    move: bool,
-    dry_run: bool,
-    make_latest_symlink: bool,
-):
-    """
-    手動でドロップした CSV を landing へ収め、manifest.json を生成する。
-    """
-    paths = get_paths()
-    landing_root = paths["LANDING_ROOT"]
-
-    run_date = run_date or today_stamp()
-    batch_id = new_batch_id()
-
-    csvs = _iter_files(src, pattern=pattern)
-    if not csvs:
-        print(f"[land-import] No files matched: {src} (pattern={pattern})")
-        return
-
-    final_dir = landing_batch_dir(landing_root, namespace, table, run_date, batch_id)
-    parts_dir = final_dir / "parts"
-
-    tmp_dir = final_dir.with_name(final_dir.name + ".tmp")
-    tmp_parts = tmp_dir / "parts"
-
-    print(f"[land-import] namespace={namespace} table={table} run_date={run_date} batch_id={batch_id}")
-    print(f"[land-import] src={src} -> dst={final_dir} (move={move}, dry_run={dry_run})")
-
-    if dry_run:
-        for i, p in enumerate(csvs, 1):
-            print(f"  [dry] {i:02d}: {p.name}")
-        return
-
-    tmp_parts.mkdir(parents=True, exist_ok=True)
-
-    files_meta = []
-    for p in csvs:
-        dst = tmp_parts / p.name
-        if move:
-            shutil.move(str(p), str(dst))
-        else:
-            shutil.copy2(str(p), str(dst))
-        meta = {
-            "path": f"parts/{p.name}",
-            "size": dst.stat().st_size,
-            "md5": _md5(dst),
-            "rows": _count_rows_csv(dst, encoding=encoding),
-        }
-        files_meta.append(meta)
-        print(f"[land-import] {'moved' if move else 'copied'}: {p} -> {dst}")
-
-    manifest = {
-        "namespace": namespace,
-        "table": table,
-        "run_date": run_date,
-        "batch_id": batch_id,
-        "source": "manual",
-        "extracted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "encoding": encoding,
-        "files": files_meta,
-        "notes": "manual drop import",
-    }
-    (tmp_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    final_dir.parent.mkdir(parents=True, exist_ok=True)
-    if final_dir.exists():
-        bak = final_dir.with_name(final_dir.name + ".bak")
-        shutil.move(str(final_dir), str(bak))
-    shutil.move(str(tmp_dir), str(final_dir))
-    print(f"[land-import] committed: {final_dir}")
-
-    if make_latest_symlink:
-        latest = final_dir.parent / "latest"
-        if latest.exists() or latest.is_symlink():
-            latest.unlink()
-        latest.symlink_to(final_dir.name)
-        print(f"[land-import] latest -> {final_dir.name}")
-
-
-def main():
-    ap = argparse.ArgumentParser(description="Import manually dropped CSVs into landing with manifest.")
-    ap.add_argument("--src", required=True, help="manual drop folder (contains CSVs)")
-    ap.add_argument("--namespace", help="namespace (or infer from src like namespace=<ns>)")
-    ap.add_argument("--table", help="table name (or infer from src like table=<table>)")
-    ap.add_argument("--run-date", help="YYYYMMDD (default: today)")
-    ap.add_argument("--encoding", default="utf-8", help="CSV encoding when counting rows (default: utf-8)")
-    ap.add_argument("--pattern", default="*.csv", help="glob pattern (default: *.csv)")
-    ap.add_argument("--move", action="store_true", help="move files instead of copy")
-    ap.add_argument("--dry-run", action="store_true", help="show what would happen")
-    ap.add_argument("--latest", action="store_true", help="create/refresh 'latest' symlink in run_date folder")
-    args = ap.parse_args()
-
-    # namespace/table をパスから推測（src が .../namespace=<ns>/table=<table>/ なら拾う）
-    src = Path(args.src)
-    namespace = args.namespace
-    table = args.table
-    for part in src.parts:
-        if namespace is None and part.startswith("namespace="):
-            namespace = part.split("=", 1)[1]
-        if table is None and part.startswith("table="):
-            table = part.split("=", 1)[1]
-    if not namespace or not table:
-        ap.error("--namespace and --table are required (or encode them in src path like namespace=<ns>/table=<table>)")
-
-    import_manual(
-        src=src,
-        namespace=namespace,
-        table=table,
-        run_date=args.run_date,
-        encoding=args.encoding,
-        pattern=args.pattern,
-        move=args.move,
-        dry_run=args.dry_run,
-        make_latest_symlink=args.latest,
-    )
-
-
-if __name__ == "__main__":
-    main()
-
-
-=== ingestion/pipelines/promote.py ===
-
-from __future__ import annotations
-
-import argparse
-import shutil
-from pathlib import Path
-
-from ingestion.utils import get_paths
-
-
-def resolve_batch_dir(landing_root: Path, namespace: str, table: str, run_date: str, batch_id: str | None) -> Path:
-    base = landing_root / f"namespace={namespace}" / f"table={table}" / f"run_date={run_date}"
-    if batch_id in (None, "latest"):
-        candidates = sorted([p for p in base.glob("batch_id=*") if p.is_dir()], key=lambda p: str(p))
-        if not candidates:
-            raise FileNotFoundError(f"No batch under {base}")
-        return candidates[-1]
-    else:
-        p = base / f"batch_id={batch_id}"
-        if not p.exists():
-            raise FileNotFoundError(f"Batch not found: {p}")
-        return p
-
-
-def promote(args):
-    paths = get_paths()
-    landing_root = paths["LANDING_ROOT"]
-    csv_root = paths["CSV_ROOT"]
-
-    batch_dir = resolve_batch_dir(landing_root, args.namespace, args.table, args.run_date, args.batch_id)
-    parts_dir = batch_dir / "parts"
-    if not parts_dir.exists():
-        raise FileNotFoundError(f"parts not found: {parts_dir}")
-
-    dest_dir = csv_root / f"namespace={args.namespace}" / f"table={args.table}"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    copied = 0
-    for src in sorted(parts_dir.glob("*.csv"), key=lambda p: str(p)):
-        # 衝突しないように run_date/batch_id をファイル名に付与
-        dest = dest_dir / f"{args.table}_{args.run_date}_{batch_dir.name}_{src.name}"
-        shutil.copy2(src, dest)
-        copied += 1
-        print(f"[promote] {src} -> {dest}")
-
-    print(f"[promote] copied={copied}, to={dest_dir}")
-
-
-def main():
-    ap = argparse.ArgumentParser(description="Promote landing batch -> db_ingestion")
-    ap.add_argument("--namespace", required=True)
-    ap.add_argument("--table", required=True)
-    ap.add_argument("--run-date", required=True, help="YYYYMMDD")
-    ap.add_argument("--batch-id", default="latest", help="specific id or 'latest'")
-    args = ap.parse_args()
-    promote(args)
-
-
-if __name__ == "__main__":
-    main()
-
-
-=== ingestion/pipelines/validate.py ===
-
-from __future__ import annotations
-
-import argparse
-import json
-from pathlib import Path
-
-from ingestion.utils import get_paths
-
-
-def validate_landing(landing_root: Path) -> int:
-    """
-    landing 下の batch ディレクトリをざっと検査。
-    返り値: 問題数
-    """
-    problems = 0
-    for batch in landing_root.rglob("batch_id=*"):
-        if not batch.is_dir():
-            continue
-        manifest = batch / "manifest.json"
-        parts = batch / "parts"
-        if not manifest.exists():
-            print(f"[validate][NG] manifest missing: {manifest}")
-            problems += 1
-            continue
-        if not parts.exists():
-            print(f"[validate][NG] parts folder missing: {parts}")
-            problems += 1
-            continue
-
-        try:
-            meta = json.loads(manifest.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"[validate][NG] manifest broken: {manifest} ({e})")
-            problems += 1
-            continue
-
-        # 最小チェック：必須キー
-        for key in ["namespace", "table", "run_date", "batch_id", "files"]:
-            if key not in meta:
-                print(f"[validate][NG] manifest key missing: {manifest} ({key})")
-                problems += 1
-
-        # parts/*.csv があるか
-        csvs = list(parts.glob("*.csv")) + list(parts.glob("*.csv.gz"))
-        if not csvs:
-            print(f"[validate][NG] no csv files: {parts}")
-            problems += 1
-
-        print(f"[validate][OK] {batch} (files={len(csvs)})")
-
-    return problems
-
-
-def main():
-    ap = argparse.ArgumentParser(description="Validate landing batches")
-    ap.add_argument("--landing", help="landing root (default: PATHS)", default=None)
-    args = ap.parse_args()
-
-    paths = get_paths()
-    landing_root = Path(args.landing) if args.landing else paths["LANDING_ROOT"]
-
-    problems = validate_landing(landing_root)
-    if problems:
-        print(f"[validate] problems={problems}")
-    else:
-        print("[validate] all good")
-
-
-if __name__ == "__main__":
-    main()
+  }
+}
+
+
+=== .devcontainer/Dockerfile===
+
+FROM python:3.12-slim
+
+# ====== Build-time args ======
+ARG USERNAME=dev
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG ENABLE_GUI=false
+ARG NOVNC_PASSWORD=
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ====== Base packages (common) ======
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    build-essential sudo zsh wget curl ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+
+# ====== GUI / noVNC (dev only when ENABLE_GUI=true) ======
+RUN if [ "$ENABLE_GUI" = "true" ]; then \
+      set -eux; \
+      apt-get update && apt-get install -y --no-install-recommends \
+        xvfb x11vnc fluxbox supervisor \
+        libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2 \
+        libxshmfence1 libxrandr2 libxdamage1 libxcomposite1 libxext6 libxfixes3 libxrender1 libxtst6 libgl1 \
+        fonts-liberation libappindicator3-1 libcups2 lsb-release xdg-utils \
+      && rm -rf /var/lib/apt/lists/* \
+      && mkdir -p /opt/novnc /opt/websockify \
+      && wget -qO- https://github.com/novnc/noVNC/archive/refs/tags/v1.4.0.tar.gz | tar xz -C /opt/novnc --strip-components=1 \
+      && wget -qO- https://github.com/novnc/websockify/archive/refs/tags/v0.11.0.tar.gz | tar xz -C /opt/websockify --strip-components=1 ; \
+    fi
+
+# ====== Non-root user ======
+RUN groupadd --gid ${USER_GID} ${USERNAME} \
+ && useradd --create-home --shell /bin/bash --uid ${USER_UID} --gid ${USER_GID} ${USERNAME} \
+ && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
+ && chmod 0440 /etc/sudoers.d/${USERNAME}
+
+WORKDIR /workspace/project
+RUN mkdir -p /workspace/project && chown -R ${USER_UID}:${USER_GID} /workspace
+
+# ====== Python deps ======
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ====== Bring app code into image (for production) ======
+# ※ dev では compose.dev の bind mount が上書きします
+COPY . /workspace/project
+RUN chown -R ${USER_UID}:${USER_GID} /workspace
+
+# ====== Supervisord config (dev-only runtime will use it) ======
+COPY .devcontainer/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# ====== Playwright browsers (optional; requirements.txtに playwright が必要) ======
+ENV DISPLAY=:99
+RUN playwright install --with-deps || true
+
+# ====== Dev-only: prepare x11vnc password file when GUI is enabled ======
+# Dev-only: prepare x11vnc password file when GUI is enabled
+RUN if [ "$ENABLE_GUI" = "true" ]; then \
+      if [ -z "$NOVNC_PASSWORD" ]; then echo "NOVNC_PASSWORD is empty"; exit 1; fi; \
+      mkdir -p /home/${USERNAME}/.vnc && \
+      x11vnc -storepasswd "${NOVNC_PASSWORD}" /home/${USERNAME}/.vnc/passwd && \
+      chown -R ${USER_UID}:${USER_GID} /home/${USERNAME}/.vnc ; \
+    fi
+
+# ====== Default command (prod) ======
+USER ${USERNAME}
+CMD ["python", "main.py"]
+
+
+=== .devcontainer/supervisord.conf===
+
+[supervisord]
+nodaemon=true
+
+[program:xvfb]
+command=/usr/bin/Xvfb :99 -screen 0 1920x1080x24
+autostart=true
+autorestart=true
+priority=1
+environment=DISPLAY=:99
+
+[program:fluxbox]
+command=fluxbox
+autostart=true
+autorestart=true
+priority=2
+environment=DISPLAY=:99
+
+[program:x11vnc]
+; パスワードファイルを使う（Dockerfile で作成）
+command=x11vnc -forever -create -display :99 -shared -rfbport 5900 -rfbauth /home/dev/.vnc/passwd
+autostart=true
+autorestart=true
+priority=3
+environment=DISPLAY=:99
+
+[program:novnc]
+command=/usr/local/bin/websockify --web=/opt/novnc 0.0.0.0:6080 localhost:5900
+autostart=true
+autorestart=true
+priority=4
+
+
+=== docker-compose.yml===
+
+name: tr-dbt-dimensional
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        USER_UID: ${LOCAL_UID:-1000}
+        USER_GID: ${LOCAL_GID:-1000}
+        ENABLE_GUI: "false"
+    env_file:
+      - ./.env
+    working_dir: /workspace/project
+    depends_on:
+      - db
+    networks:
+      - metanet1
+
+  db:
+    image: postgres:16
+    restart: always
+    env_file:
+      - ./.env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"   # 本番では外すのが安全
+    networks:
+      - metanet1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} -h 127.0.0.1 -p ${POSTGRES_PORT:-5432}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # （将来削除予定）Metabase は現状維持
+  metabase:
+    image: metabase/metabase:latest
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: ${POSTGRES_DB}
+      MB_DB_HOST: db
+      MB_DB_PORT: ${POSTGRES_PORT:-5432}
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+    networks:
+      - metanet1
+    ports:
+      - "3000:3000"
+
+  # ===== 追加：Redis =====
+  redis:
+    image: redis:7-alpine
+    restart: always
+    networks:
+      - metanet1
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ===== Superset (Web) =====
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile.superset
+    image: local/superset:celery
+    container_name: superset
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
+      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - metanet1
+    ports:
+      - "8088:8088"
+    command: ["/bin/bash", "-c", "gunicorn -w 4 -k gevent --timeout 60 -b 0.0.0.0:8088 'superset.app:create_app()'"]
+
+  # ===== 追加：Celery Worker =====
+  superset-worker:
+    image: local/superset:celery
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
+      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      superset:
+        condition: service_started
+    networks:
+      - metanet1
+    command: ["celery", "--app=superset.tasks.celery_app:app", "worker", "--pool=prefork", "-O", "fair", "-c", "4"]
+
+  # ===== 追加：Celery Beat (RedBeat) =====
+  superset-beat:
+    image: local/superset:celery
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
+      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
+      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      superset:
+        condition: service_started
+    networks:
+      - metanet1
+    command: ["celery", "--app=superset.tasks.celery_app:app", "beat"]
+
+networks:
+  metanet1:
+    driver: bridge
+
+volumes:
+  pgdata:
+  superset_home:
+
+
+=== docker-compose.dev.yml===
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        USER_UID: ${LOCAL_UID:-1000}
+        USER_GID: ${LOCAL_GID:-1000}
+        ENABLE_GUI: "true"
+        NOVNC_PASSWORD: ${NOVNC_PASSWORD}
+    env_file:
+      - .env
+    volumes:
+      - ./:/workspace/project:cached
+      - ${HOME}/.config:/home/dev/.config
+    ports:
+      - "6080:6080"
+    environment:
+      - DISPLAY=:99
+    command: ["supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+
+  db:
+    ports:
+      - "5432:5432"
+
+  metabase:
+    ports:
+      - "3000:3000"
+
+  superset:
+    ports:
+      - "8088:8088"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+
+=== requirements.txt===
+
+dbt-core
+sqlfluff
+sqlfluff-templater-dbt
+dbt-postgres
+python-dotenv
+ruff
+psycopg2-binary
+requests
+pandas
+pyarrow
+pyyaml
+playwright
+sqlalchemy
+jupyter
+python-dateutil
+
+
+=== .dockerignore ===
+
+.git
+docker-compose*.yml
+pgdata
+__pycache__/
+*.pyc
+.env
+.env.*
+.output/
+dist/
+node_modules/
 
 
 === .env ===
@@ -917,7 +457,7 @@ NOVNC_PASSWORD=sample_password
 
 
 # postgres
-# POSTGRES_HOST=postgres サービス名は db
+POSTGRES_HOST=db
 POSTGRES_PORT=5432
 POSTGRES_USER=admin
 POSTGRES_PASSWORD=admin12345
@@ -953,3 +493,97 @@ SUPERSET_DATABASE_URI=postgresql+psycopg2://${SUPERSET_ADMIN_USERNAME}:${SUPERSE
 # Redis（デフォルトのままでもOK）
 REDIS_HOST=redis
 REDIS_PORT=6379
+
+
+=== superset/Dockerfile.superset ===
+
+# change this to apache/superset:5.0.0 or whatever version you want to build from;
+# otherwise the default is the latest commit on GitHub master branch
+FROM apache/superset:latest
+
+USER root
+
+# Set environment variable for Playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/playwright-browsers
+
+# Install packages using uv into the virtual environment
+RUN . /app/.venv/bin/activate && \
+    uv pip install \
+    # install psycopg2 for using PostgreSQL metadata store - could be a MySQL package if using that backend:
+    psycopg2-binary \
+    # add the driver(s) for your data warehouse(s), in this example we're showing for Microsoft SQL Server:
+    redis gevent greenlet \
+    # package needed for using single-sign on authentication:
+    # Authlib \
+    # openpyxl to be able to upload Excel files
+    openpyxl \
+    # Pillow for Alerts & Reports to generate PDFs of dashboards
+    Pillow
+    # install Playwright for taking screenshots for Alerts & Reports. This assumes the feature flag PLAYWRIGHT_REPORTS_AND_THUMBNAILS is enabled
+    # That feature flag will default to True starting in 6.0.0
+    # Playwright works only with Chrome.
+    # If you are still using Selenium instead of Playwright, you would instead install here the selenium package and a headless browser & webdriver
+    # playwright \
+    # && playwright install-deps \
+    # && PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/playwright-browsers playwright install chromium
+# Switch back to the superset user
+USER superset
+
+CMD ["/app/docker/entrypoints/run-server.sh"]
+
+
+=== superset/superset_config.py ===
+
+import os
+
+# ===== Security =====
+SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY", "please-change-me")
+
+# ===== Metadata DB =====
+SQLALCHEMY_DATABASE_URI = os.environ.get("SUPERSET_DATABASE_URI")
+
+# ===== Redis (Cache & Celery broker/result) =====
+REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}"
+
+# Cache (ダッシュボード/クエリ高速化)
+CACHE_CONFIG = {
+    "CACHE_TYPE": "RedisCache",
+    "CACHE_DEFAULT_TIMEOUT": 300,
+    "CACHE_KEY_PREFIX": "superset_",
+    "CACHE_REDIS_URL": f"{REDIS_URL}/1",
+}
+DATA_CACHE_CONFIG = CACHE_CONFIG
+
+# Celery（非同期処理 / Alerts & Reports 等）
+class CeleryConfig:
+    broker_url = f"{REDIS_URL}/0"
+    result_backend = f"{REDIS_URL}/0"
+    task_annotations = {"*": {"rate_limit": "10/s"}}
+    worker_send_task_events = True
+    task_send_sent_event = True
+
+CELERY_CONFIG = CeleryConfig
+
+# =====（任意）機能フラグ =====
+# Alerts & Reports を使う場合に有効化（ヘッドレスブラウザ準備も必要）
+FEATURE_FLAGS = {
+    # "ALERT_REPORTS": True,
+}
+
+# =====（任意）メール送信（レポート配信に利用） =====
+# EMAIL_NOTIFICATIONS = True
+# SMTP_HOST = "smtp.example.com"
+# SMTP_PORT = 587
+# SMTP_STARTTLS = True
+# SMTP_SSL = False
+# SMTP_USER = "user"
+# SMTP_PASSWORD = "password"
+# SMTP_MAIL_FROM = "no-reply@example.com"
+
+# =====（任意）レポート画像レンダリング用 WebDriver =====
+# REPORTS_WEBDRIVER = "chrome"
+# WEBDRIVER_BASEURL = os.environ.get("WEBDRIVER_BASEURL", "http://superset:8088/")
+# WEBDRIVER_TYPE = "chrome"
+# WEBDRIVER_OPTION_ARGS = ["--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]

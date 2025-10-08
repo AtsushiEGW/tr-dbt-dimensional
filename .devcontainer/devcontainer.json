@@ -5,22 +5,10 @@
     "../docker-compose.dev.yml"
   ],
   "service": "app",
-  "runservicies": ["app"],
+  "runServices": ["app"],
   "workspaceFolder": "/workspace/project",
   "shutdownAction": "none",
   "overrideCommand": false,
-
-  "features": {
-    "ghcr.io/devcontainers/features/common-utils:2": {
-      "installZsh": true,
-      "configureZshAsDefaultShell": true,
-      "zshTheme": "agnoster",
-      "installOhMyZsh": true,
-      "installOhMyZshConfig": true,
-      "ohMyZshPlugins": "git zsh-autosuggestions zsh-syntax-highlighting",
-      "upgradePackages": true
-    }
-  },
 
   "mounts": [
     "source=${localEnv:HOME}/.dotfiles,target=/home/dev/.dotfiles,type=bind,consistency=cached,readonly"
