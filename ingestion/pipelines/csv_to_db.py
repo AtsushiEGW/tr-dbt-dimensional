@@ -44,7 +44,7 @@ def load_config() -> dict:
 
 
 # ---------------------------
-# Helpers: files & headers
+# Helpers: files & encodings
 # ---------------------------
 def _iter_csv_files(folder_root: Path, folder: str, pattern: str) -> list[Path]:
     """folder_root/folder 配下で pattern にマッチする CSV を昇順列挙"""
@@ -70,6 +70,9 @@ def _ensure_utf8_copy(path: Path, src_encoding: str) -> Path:
     return dst
 
 
+# ---------------------------
+# Header detection (auto skiprows)
+# ---------------------------
 def _read_header_raw(path: Path, encoding: str, skiprows: int = 0) -> list[str]:
     """
     先頭の“ヘッダ行”を取得。skiprows > 0 なら読み飛ばしてから CSV 1行読取。
@@ -91,23 +94,108 @@ def _read_header_raw(path: Path, encoding: str, skiprows: int = 0) -> list[str]:
     return hdr
 
 
-def _analyze_headers(files: list[Path], encoding: str, skiprows: int) -> tuple[list[str], dict[Path, list[str]]]:
+def _detect_header_and_skiprows(path: Path, encoding: str, configured_skiprows: int | None) -> tuple[list[str], int]:
     """
-    全ファイルのヘッダを解析し、
-      - union_cols: 和集合（各ベース名の最大多重度分だけ xxx_1..xxx_k を展開。最初の出現順）
-      - norm_by_file: 各ファイルに対する“正規化済みヘッダ名配列”
+    先頭から数行を読んで、ヘッダ行と「スキップすべき行数」を推定する。
+    - configured_skiprows が明示指定されていればそれを尊重（その直後の1行をヘッダとみなす）
+    - 未指定(None)の場合は、列数 >= 2 かつ次行と列数一致する最初の行をヘッダとみなす
+    戻り値: (header_columns, skiprows_effective)
+      ※ skiprows_effective は read_csv に渡すための「メタ行だけ」のスキップ数（ヘッダ行は別で扱う）
+    """
+    import csv, io
+
+    if configured_skiprows is not None and configured_skiprows >= 0:
+        hdr = _read_header_raw(path, encoding=encoding, skiprows=configured_skiprows)
+        return hdr, configured_skiprows
+
+    # 自動検出
+    max_probe = 10
+    lines: list[str] = []
+    with path.open("r", encoding=encoding, newline="") as f:
+        for _ in range(max_probe):
+            line = f.readline()
+            if line == "":
+                break
+            lines.append(line)
+
+    def parse_one(line: str) -> list[str]:
+        buf = io.StringIO(line)
+        return next(csv.reader(buf))
+
+    header = []
+    for idx in range(len(lines)):
+        try:
+            cols = parse_one(lines[idx])
+        except Exception:
+            continue
+        if len(cols) < 2:
+            continue  # 列数1（カンマ無し等）はヘッダ候補として弱い
+
+        next_cols_cnt = None
+        for j in range(idx + 1, len(lines)):
+            if lines[j].strip() == "":
+                continue
+            try:
+                next_cols = parse_one(lines[j])
+                next_cols_cnt = len(next_cols)
+            except Exception:
+                continue
+            break
+
+        if next_cols_cnt is None or next_cols_cnt == len(cols):
+            header = cols
+            header_idx = idx
+            break
+    else:
+        # 見つからなければ先頭行をヘッダ扱い
+        header = parse_one(lines[0]) if lines else []
+        header_idx = 0
+
+    # BOM 除去
+    if header and isinstance(header[0], str) and header[0].startswith("\ufeff"):
+        header[0] = header[0].lstrip("\ufeff")
+
+    skiprows_effective = header_idx  # メタ行数
+    return header, skiprows_effective
+
+
+def _analyze_headers(
+    files: list[Path],
+    encoding: str,
+    default_skiprows: int | str | None,
+) -> tuple[list[str], dict[Path, list[str]], dict[Path, int]]:
+    """
+    各ファイルごとに (ヘッダ, 実効skiprows) を取得し、
+      - union_cols: ヘッダ和集合（重複名は xxx_1..xxx_k 展開）
+      - norm_by_file: 各ファイルの正規化後ヘッダ（xxx_1..付与）
+      - skiprows_by_file: 各ファイルに対する read_csv の「メタ行だけ」のスキップ数
+    を返す。
     """
     if not files:
-        return [], {}
+        return [], {}, {}
+
+    # "auto" または None → 自動検出を使う
+    auto = (default_skiprows is None) or (isinstance(default_skiprows, str) and default_skiprows.lower() == "auto")
+    explicit_skip = None
+    if isinstance(default_skiprows, int) and default_skiprows >= 0:
+        explicit_skip = default_skiprows
+
+    per_file_raw: dict[Path, list[str]] = {}
+    skiprows_by_file: dict[Path, int] = {}
 
     order: list[str] = []
     seen: set[str] = set()
     max_mult: dict[str, int] = {}
-    per_file_raw: dict[Path, list[str]] = {}
 
     for f in files:
-        hdr = _read_header_raw(f, encoding=encoding, skiprows=skiprows)
+        if auto:
+            hdr, sk = _detect_header_and_skiprows(f, encoding=encoding, configured_skiprows=None)
+        else:
+            hdr, sk = _detect_header_and_skiprows(f, encoding=encoding, configured_skiprows=explicit_skip)
+
         per_file_raw[f] = hdr
+        skiprows_by_file[f] = sk
+
         counts: dict[str, int] = {}
         for col in hdr:
             counts[col] = counts.get(col, 0) + 1
@@ -139,9 +227,12 @@ def _analyze_headers(files: list[Path], encoding: str, skiprows: int) -> tuple[l
                 norm.append(f"{col}_{cnt}")
         norm_by_file[f] = norm
 
-    return union_cols, norm_by_file
+    return union_cols, norm_by_file, skiprows_by_file
 
 
+# ---------------------------
+# De-dup in TEMP (ON CONFLICT safety)
+# ---------------------------
 def _dedupe_temp_by_pk(engine: Engine, temp_fqtn: str, pk_cols: list[str]):
     """
     TEMP 内の主キー重複を「後勝ち（最後に入った行が残る）」に正規化。
@@ -216,13 +307,13 @@ def upsert_table(
 ):
     """
     テーブル設定（encoding/skiprows など）を反映しつつ、
-    db_ingestion 配下の CSV → UTF-8 正規化 → TEMP → UPSERT。
+    db_ingestion 配下の CSV → UTF-8 正規化 → ヘッダ自動検出 → TEMP → UPSERT。
     """
     folder = cfg["folder"]
     pattern = cfg.get("filename_glob", "*.csv")
     pk_cols = cfg["primary_key"]
-    encoding = cfg.get("encoding", "utf-8")    # tables.yml の defaults からマージ済み
-    skiprows = int(cfg.get("skiprows", 0))     # 同上
+    encoding = cfg.get("encoding", "utf-8")     # defaults からマージ済み
+    skiprows_cfg = cfg.get("skiprows", None)    # 例: None / "auto" / 0 / 1 / ...
 
     schema = TARGET_SCHEMA
     target_base = cfg.get("target_table", table_name)
@@ -234,7 +325,7 @@ def upsert_table(
         print(f"[{table_name}] No CSV files under {(csv_root / folder)}")
         return
 
-    # 2) 必要なら UTF-8 一時ファイルへ変換（cp932 等）
+    # 2) UTF-8 一時ファイルへ変換（cp932 等）
     processed_files: list[Path] = []
     tmp_to_cleanup: list[Path] = []
     for f in src_files:
@@ -244,8 +335,10 @@ def upsert_table(
             tmp_to_cleanup.append(g)
 
     try:
-        # 3) ヘッダ解析（skiprows を反映）
-        union_cols, norm_by_file = _analyze_headers(processed_files, encoding="utf-8", skiprows=skiprows)
+        # 3) ヘッダ解析（自動/明示 skiprows に対応）
+        union_cols, norm_by_file, skiprows_by_file = _analyze_headers(
+            processed_files, encoding="utf-8", default_skiprows=skiprows_cfg
+        )
         if not union_cols:
             print(f"[{table_name}] WARNING: header not found")
             return
@@ -272,21 +365,23 @@ def upsert_table(
                 idx_cols = ", ".join([f'"{c}"' for c in pk_cols])
                 conn.execute(text(f'CREATE INDEX ON {temp_fqtn} ({idx_cols});'))
 
-        # 6) 読み込み & COPY（UTF-8 ファイル + skiprows）
+        # 6) 読み込み & COPY（ファイルごとに skiprows を使い分け）
         for f in processed_files:
             print(f"[{table_name}] Loading {f}")
             norm_cols = norm_by_file[f]
+            sk_meta = int(skiprows_by_file.get(f, 0))  # メタ行だけの数
+
             for chunk in pd.read_csv(
                 f,
-                header=0,               # skiprows 後の行をヘッダとして読む
-                names=norm_cols,        # 正規化済みヘッダで置換（重複は解消済み）
+                header=None,               # pandas にヘッダ行を解釈させない
+                names=norm_cols,           # 正規化済みヘッダを手動で当てる
                 dtype=str,
                 chunksize=chunksize,
                 na_filter=True,
-                keep_default_na=False,  # 'NA' などは文字として扱う
-                na_values=[""],         # 空欄のみ欠損 → COPY で NULL
+                keep_default_na=False,     # 'NA' などは文字として扱う
+                na_values=[""],            # 空欄のみ欠損 → COPY で NULL
                 encoding="utf-8",
-                skiprows=skiprows,      # 先頭 N 行をスキップ
+                skiprows=sk_meta + 1,      # メタ行 + ヘッダ行の合計をスキップ
             ):
                 # PK 欠損を捨てる（UPSERT できない）
                 for pk in pk_cols:

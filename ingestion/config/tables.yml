@@ -1,6 +1,6 @@
 defaults:
   encoding: utf-8
-  skiprows: 0
+  skiprows: auto        # ← 自動検出にしたい場合。無指定でも可
   chunksize: 200000
   filename_glob: "*.csv"
 
@@ -20,4 +20,5 @@ tables:
   tags:
     folder: namespace=ingest_test/table=tags
     primary_key: ["userId", "movieId", "timestamp"]
-    
+    # 例: 常に1行メタがあると分かっているなら上書き
+    # skiprows: 1
