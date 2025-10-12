@@ -5,7 +5,7 @@
 \n\n\n=== ingestion/config/tables.yml ===\n
 defaults:
   encoding: utf-8
-  skiprows: 0
+  skiprows: auto        # ← 自動検出にしたい場合。無指定でも可
   chunksize: 200000
   filename_glob: "*.csv"
 
@@ -25,7 +25,8 @@ tables:
   tags:
     folder: namespace=ingest_test/table=tags
     primary_key: ["userId", "movieId", "timestamp"]
-    \n\n\n=== ingestion/utils.py ===\n
+    # 例: 常に1行メタがあると分かっているなら上書き
+    # skiprows: 1\n\n\n=== ingestion/utils.py ===\n
 from __future__ import annotations
 
 import os
@@ -220,6 +221,8 @@ def clean_landing():
 
 if __name__ == "__main__":
     clean_landing()\n\n\n=== ingestion/pipelines/csv_to_db.py ===\n
+
+# ingestion/pipelines/csv_to_db.py
 from __future__ import annotations
 
 import argparse
@@ -498,27 +501,39 @@ def upsert_table(
         for f in processed_files:
             print(f"[{table_name}] Loading {f}")
             norm_cols = norm_by_file[f]
+
+            # ここがポイント:
+            #  - header=0 で“CSVの本来のヘッダ”をヘッダとして解釈し、データ化しない
+            #  - engine="python" で末尾カンマ等の可変列に強くする
+            #  - usecols=range(len(norm_cols)) で、末尾カンマで増える空列を物理位置で無視
+            #  - 読み込み後に列名を正規化ヘッダに差し替え（重複ヘッダの一意化を維持）
             for chunk in pd.read_csv(
                 f,
-                header=0,               # skiprows 後の行をヘッダとして読む
-                names=norm_cols,        # 正規化済みヘッダで置換（重複は解消済み）
+                header=0,                       # ← ヘッダ行をデータに入れない
                 dtype=str,
                 chunksize=chunksize,
                 na_filter=True,
-                keep_default_na=False,  # 'NA' などは文字として扱う
-                na_values=[""],         # 空欄のみ欠損 → COPY で NULL
+                keep_default_na=False,          # 'NA' などは文字として扱う
+                na_values=[""],                 # 空欄のみ欠損 → COPY で NULL
                 encoding="utf-8",
-                skiprows=skiprows,      # 先頭 N 行をスキップ
+                skiprows=skiprows,              # 先頭のメタ行などをスキップ
+                engine="python",                # 可変列/末尾カンマ対策
+                usecols=range(len(norm_cols)),  # 余分な空列（末尾カンマ起因）を無視
             ):
+                # 列名を“正規化済みヘッダ”に揃える
+                chunk.columns = norm_cols
+
                 # PK 欠損を捨てる（UPSERT できない）
                 for pk in pk_cols:
                     if pk in chunk.columns:
                         chunk = chunk[chunk[pk].notna() & (chunk[pk] != "")]
-                # DB 列に合わせる
+
+                # DB 列に合わせる（欠け列を追加、余分は落とす）
                 for c in db_columns:
                     if c not in chunk.columns:
                         chunk[c] = pd.NA
                 chunk = chunk[db_columns]
+
                 _copy_df_to_table(engine, chunk, temp_fqtn, db_columns)
 
         # 7) TEMP 内で主キー重複を「後勝ち」に正規化

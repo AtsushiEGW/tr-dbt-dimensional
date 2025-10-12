@@ -3,6 +3,7 @@ describe-docker:
 	echo "===Project Directory Structure===\n" > file_describe.txt
 	tree -a -I "file_describe.txt|Makefile|.git|.gitignore|.vscode|adventureworks|data|raw_data|data_source|docs|memo.md|note|supervisord.pid|test.py|backup" >> file_describe.txt
 
+	echo "#####################################################################################" >> file_describe.txt
 	echo "\n\n\n=== .devcontainer/devcontainer.json===\n" >> file_describe.txt
 	cat .devcontainer/devcontainer.json >> file_describe.txt
 

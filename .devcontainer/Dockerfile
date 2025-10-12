@@ -51,7 +51,7 @@ ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
 ARG NOVNC_PASSWORD=
-ARG INSTALL_PLAYWRIGHT=false  # true で Playwright ブラウザ導入（重い）
+ARG INSTALL_PLAYWRIGHT=true  # true で Playwright ブラウザ導入（重い）
 
 # dev 用ユーザ
 RUN groupadd --gid ${USER_GID} ${USERNAME} \
@@ -59,12 +59,14 @@ RUN groupadd --gid ${USER_GID} ${USERNAME} \
 
 # GUI/NoVNC に必要なランタイム（最小セット）＋診断用 iproute2（不要なら削除可）
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      xvfb x11vnc fluxbox supervisor \
-      libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2 \
-      libxshmfence1 libxrandr2 libxdamage1 libxcomposite1 libxext6 libxfixes3 libxrender1 libxtst6 libgl1 \
-      fonts-liberation libappindicator3-1 libcups2 xdg-utils \
-      iproute2 \
+    && apt-get install -y --no-install-recommends \
+    build-essential zsh \
+    xvfb x11vnc fluxbox supervisor \
+    libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2 \
+    libxshmfence1 libxrandr2 libxdamage1 libxcomposite1 libxext6 libxfixes3 libxrender1 libxtst6 libgl1 \
+    fonts-liberation libappindicator3-1 libcups2 xdg-utils \
+    iproute2 \
+    tree \
  && rm -rf /var/lib/apt/lists/*
 
 # noVNC / websockify を配置し、noVNC の utils から websockify へ symlink を張る
