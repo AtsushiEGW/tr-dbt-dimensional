@@ -5,9 +5,9 @@
 \n\n\n=== ingestion/config/tables.yml ===\n
 defaults:
   encoding: utf-8
-  skiprows: auto        # ← 自動検出にしたい場合。無指定でも可
   chunksize: 200000
   filename_glob: "*.csv"
+  skiprows: 0
 
 tables:
   links:

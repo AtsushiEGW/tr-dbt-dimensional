@@ -1,4 +1,3 @@
-
 # ingestion/pipelines/csv_to_db.py
 from __future__ import annotations
 
@@ -72,14 +71,14 @@ def _ensure_utf8_copy(path: Path, src_encoding: str) -> Path:
     return dst
 
 
-def _read_header_raw(path: Path, encoding: str, skiprows: int = 0) -> list[str]:
+def _read_header_raw(path: Path, encoding: str, rowskip: int = 0) -> list[str]:
     """
-    先頭の“ヘッダ行”を取得。skiprows > 0 なら読み飛ばしてから CSV 1行読取。
+    “CSVのヘッダ行”を取得。rowskip > 0 ならその行数だけ読み飛ばしてからヘッダ1行を読む。
     重複カラム名をそのまま得るため pandas ではなく csv.reader を使う。
     """
     import csv
     with path.open("r", encoding=encoding, newline="") as f:
-        for _ in range(skiprows):
+        for _ in range(rowskip):
             if f.readline() == "":
                 return []
         reader = csv.reader(f)
@@ -93,7 +92,7 @@ def _read_header_raw(path: Path, encoding: str, skiprows: int = 0) -> list[str]:
     return hdr
 
 
-def _analyze_headers(files: list[Path], encoding: str, skiprows: int) -> tuple[list[str], dict[Path, list[str]]]:
+def _analyze_headers(files: list[Path], encoding: str, rowskip: int) -> tuple[list[str], dict[Path, list[str]]]:
     """
     全ファイルのヘッダを解析し、
       - union_cols: 和集合（各ベース名の最大多重度分だけ xxx_1..xxx_k を展開。最初の出現順）
@@ -108,7 +107,7 @@ def _analyze_headers(files: list[Path], encoding: str, skiprows: int) -> tuple[l
     per_file_raw: dict[Path, list[str]] = {}
 
     for f in files:
-        hdr = _read_header_raw(f, encoding=encoding, skiprows=skiprows)
+        hdr = _read_header_raw(f, encoding=encoding, rowskip=rowskip)
         per_file_raw[f] = hdr
         counts: dict[str, int] = {}
         for col in hdr:
@@ -217,20 +216,21 @@ def upsert_table(
     auto_add_columns: bool,
 ):
     """
-    テーブル設定（encoding/skiprows など）を反映しつつ、
+    設定（encoding / rowskip など）を反映しつつ、
     db_ingestion 配下の CSV → UTF-8 正規化 → TEMP → UPSERT。
+    ※ 末尾カンマの正規化は上流（fetch/landing まで）で実施し、この段階では考慮しない。
     """
     folder = cfg["folder"]
     pattern = cfg.get("filename_glob", "*.csv")
     pk_cols = cfg["primary_key"]
-    encoding = cfg.get("encoding", "utf-8")    # tables.yml の defaults からマージ済み
-    skiprows = int(cfg.get("skiprows", 0))     # 同上
+    encoding = cfg.get("encoding", "utf-8")   # defaults からマージ済み
+    rowskip = int(cfg.get("rowskip", 0))      # ← rowskip を使用
 
     schema = TARGET_SCHEMA
     target_base = cfg.get("target_table", table_name)
     target_fqtn = f'"{schema}"."{target_base}"'
 
-    # 1) 元 CSV の列挙
+    # 1) 対象 CSV の列挙
     src_files = _iter_csv_files(csv_root, folder, pattern)
     if not src_files:
         print(f"[{table_name}] No CSV files under {(csv_root / folder)}")
@@ -246,8 +246,8 @@ def upsert_table(
             tmp_to_cleanup.append(g)
 
     try:
-        # 3) ヘッダ解析（skiprows を反映）
-        union_cols, norm_by_file = _analyze_headers(processed_files, encoding="utf-8", skiprows=skiprows)
+        # 3) ヘッダ解析（rowskip を反映）
+        union_cols, norm_by_file = _analyze_headers(processed_files, encoding="utf-8", rowskip=rowskip)
         if not union_cols:
             print(f"[{table_name}] WARNING: header not found")
             return
@@ -274,30 +274,23 @@ def upsert_table(
                 idx_cols = ", ".join([f'"{c}"' for c in pk_cols])
                 conn.execute(text(f'CREATE INDEX ON {temp_fqtn} ({idx_cols});'))
 
-        # 6) 読み込み & COPY（UTF-8 ファイル + skiprows）
+        # 6) 読み込み & COPY（UTF-8 ファイル + rowskip）
         for f in processed_files:
             print(f"[{table_name}] Loading {f}")
             norm_cols = norm_by_file[f]
 
-            # ここがポイント:
-            #  - header=0 で“CSVの本来のヘッダ”をヘッダとして解釈し、データ化しない
-            #  - engine="python" で末尾カンマ等の可変列に強くする
-            #  - usecols=range(len(norm_cols)) で、末尾カンマで増える空列を物理位置で無視
-            #  - 読み込み後に列名を正規化ヘッダに差し替え（重複ヘッダの一意化を維持）
             for chunk in pd.read_csv(
                 f,
-                header=0,                       # ← ヘッダ行をデータに入れない
+                header=0,               # ← “CSVの本来のヘッダ”を使用（データ化しない）
                 dtype=str,
                 chunksize=chunksize,
                 na_filter=True,
-                keep_default_na=False,          # 'NA' などは文字として扱う
-                na_values=[""],                 # 空欄のみ欠損 → COPY で NULL
+                keep_default_na=False,  # 'NA' などは文字として扱う
+                na_values=[""],         # 空欄のみ欠損 → COPY で NULL
                 encoding="utf-8",
-                skiprows=skiprows,              # 先頭のメタ行などをスキップ
-                engine="python",                # 可変列/末尾カンマ対策
-                usecols=range(len(norm_cols)),  # 余分な空列（末尾カンマ起因）を無視
+                skiprows=rowskip,       # ← テーブルごとのメタ行スキップ
             ):
-                # 列名を“正規化済みヘッダ”に揃える
+                # 列名を正規化ヘッダに差し替え（重複ヘッダは _1,_2,... で一意化済み）
                 chunk.columns = norm_cols
 
                 # PK 欠損を捨てる（UPSERT できない）
@@ -305,7 +298,7 @@ def upsert_table(
                     if pk in chunk.columns:
                         chunk = chunk[chunk[pk].notna() & (chunk[pk] != "")]
 
-                # DB 列に合わせる（欠け列を追加、余分は落とす）
+                # DB 列に合わせる（欠け列は追加、余分は落とす）
                 for c in db_columns:
                     if c not in chunk.columns:
                         chunk[c] = pd.NA

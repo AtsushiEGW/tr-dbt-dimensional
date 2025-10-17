@@ -1,13 +1,16 @@
 defaults:
   encoding: utf-8
-  skiprows: auto        # ← 自動検出にしたい場合。無指定でも可
   chunksize: 200000
   filename_glob: "*.csv"
+  load_mode: upsert # or replace
+  skiprows: 0
 
 tables:
   links:
     folder: namespace=ingest_test/table=links
     primary_key: ["movieId"]
+    load_mode: replace
+    replace_keys: ["date", "name"] # load_mode=replace のとき必須
 
   movies:
     folder: namespace=ingest_test/table=movies
