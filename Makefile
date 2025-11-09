@@ -247,4 +247,4 @@ docker-superset-init:
 
 
 docker-start:
-	docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml start -d db redis 
+	docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml up -d db redis superset-worker superset-beat
