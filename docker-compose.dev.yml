@@ -15,6 +15,7 @@ services:
     volumes:
       - ./:/workspace/project:cached
       - ${HOME}/.config:/home/dev/.config
+      - ${HOME}/.dotfiles:/home/dev/.dotfiles
     ports:
       - "6080:6080"
     environment:

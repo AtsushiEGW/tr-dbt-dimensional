@@ -1,0 +1,50 @@
+dbt_projet:
+  outputs:
+    dev:
+      dbname: postgres
+      host: dev
+      pass: user
+      port: 5432
+      schema: postgres
+      threads: 1
+      type: postgres
+      user: user
+  target: dev
+my_dwh_demo:
+  outputs:
+    dev:
+      connect_timeout: '{{ env_var(''DBT_CONNECT_TIMEOUT'', ''30'') | int }}'
+      dbname: '{{ env_var(''POSTGRES_DB'') }}'
+      host: '{{ env_var(''POSTGRES_HOST'', ''db'') }}'
+      keepalives: '{{ env_var(''DBT_KEEPALIVES'', ''1'') | int }}'
+      keepalives_idle: '{{ env_var(''DBT_KEEPALIVES_IDLE'', ''0'') | int }}'
+      password: '{{ env_var(''POSTGRES_PASSWORD'') }}'
+      port: '{{ env_var(''POSTGRES_PORT'', ''5432'') | int }}'
+      schema: '{{ env_var(''TARGET_SCHEMA'', ''raw'') }}'
+      sslmode: '{{ env_var(''DBT_SSLMODE'', ''prefer'') }}'
+      threads: '{{ env_var(''DBT_THREADS'', ''4'') | int }}'
+      type: postgres
+      user: '{{ env_var(''POSTGRES_USER'') }}'
+    prod:
+      connect_timeout: '{{ env_var(''DBT_CONNECT_TIMEOUT_PROD'', env_var(''DBT_CONNECT_TIMEOUT'',
+        ''30'')) | int }}'
+      dbname: '{{ env_var(''POSTGRES_DB_PROD'', env_var(''POSTGRES_DB'')) }}'
+      host: '{{ env_var(''POSTGRES_HOST_PROD'', env_var(''POSTGRES_HOST'', ''db''))
+        }}'
+      keepalives: '{{ env_var(''DBT_KEEPALIVES_PROD'', env_var(''DBT_KEEPALIVES'',
+        ''1'')) | int }}'
+      keepalives_idle: '{{ env_var(''DBT_KEEPALIVES_IDLE_PROD'', env_var(''DBT_KEEPALIVES_IDLE'',
+        ''0'')) | int }}'
+      password: '{{ env_var(''POSTGRES_PASSWORD_PROD'', env_var(''POSTGRES_PASSWORD''))
+        }}'
+      port: '{{ env_var(''POSTGRES_PORT_PROD'', env_var(''POSTGRES_PORT'', ''5432''))
+        | int }}'
+      schema: '{{ env_var(''TARGET_SCHEMA_PROD'', env_var(''TARGET_SCHEMA'', ''raw''))
+        }}'
+      sslmode: '{{ env_var(''DBT_SSLMODE_PROD'', env_var(''DBT_SSLMODE'', ''prefer''))
+        }}'
+      threads: '{{ env_var(''DBT_THREADS_PROD'', env_var(''DBT_THREADS'', ''4''))
+        | int }}'
+      type: postgres
+      user: '{{ env_var(''POSTGRES_USER_PROD'', env_var(''POSTGRES_USER'')) }}'
+  target: '{{ env_var(''DBT_TARGET'', ''dev'') }}'
