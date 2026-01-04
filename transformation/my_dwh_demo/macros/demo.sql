@@ -1,8 +1,5 @@
-{%- macro nop() %}
+{%- macro noop() -%}
 
 -- this macro is nothing to do
 
-
-
-
-{%- endmacro %}
+{%- endmacro -%}
