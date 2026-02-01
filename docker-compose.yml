@@ -1,157 +1,21 @@
 name: tr-dbt-dimensional
 
 services:
-  app:
-    build:
-      context: .
-      dockerfile: .devcontainer/Dockerfile
-      target: app           # ★ 本番は最小イメージ
-      args:
-        USER_UID: ${LOCAL_UID:-1000}
-        USER_GID: ${LOCAL_GID:-1000}
-    env_file:
-      - ./.env
-    working_dir: /workspace/project
-    depends_on:
-      - db
-    networks:
-      - metanet1
-    # 本番では GUI/NoVNC は使わない → ports/expose は不要
-
   db:
-    image: postgres:16
+    image: postgres:17
+    container_name: tr-dbt-dimensional-postgres
     restart: always
     env_file:
       - ./.env
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"   # 本番で不要なら外す
-    networks:
-      - metanet1
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres} -h 127.0.0.1 -p ${POSTGRES_PORT:-5432}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  # （将来削除予定）Metabase は現状維持
-  metabase:
-    image: metabase/metabase:latest
-    restart: always
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: ${POSTGRES_DB}
-      MB_DB_HOST: db
-      MB_DB_PORT: ${POSTGRES_PORT:-5432}
-      MB_DB_USER: ${POSTGRES_USER}
-      MB_DB_PASS: ${POSTGRES_PASSWORD}
-    networks:
-      - metanet1
-    ports:
-      - "3000:3000"
-
-  # Redis
-  redis:
-    image: redis:7-alpine
-    restart: always
-    networks:
-      - metanet1
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-
-  # Superset（Web）
-  superset:
-    build:
-      context: ./superset
-      dockerfile: Dockerfile.superset
-    image: local/superset:celery
-    container_name: superset
-    restart: always
-    env_file:
-      - ./.env
-    environment:
-      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
-      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
-      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-    volumes:
-      - superset_home:/app/superset_home
-      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - metanet1
-    ports:
-      - "8088:8088"
-    command: ["/bin/bash", "-c", "gunicorn -w 4 -k gevent --timeout 60 -b 0.0.0.0:8088 'superset.app:create_app()'"]
-
-  # Celery Worker
-  superset-worker:
-    image: local/superset:celery
-    restart: always
-    env_file:
-      - ./.env
-    environment:
-      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
-      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
-      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-    volumes:
-      - superset_home:/app/superset_home
-      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      superset:
-        condition: service_started
-    networks:
-      - metanet1
-    command: ["celery", "--app=superset.tasks.celery_app:app", "worker", "--pool=prefork", "-O", "fair", "-c", "4"]
-
-  # Celery Beat
-  superset-beat:
-    image: local/superset:celery
-    restart: always
-    env_file:
-      - ./.env
-    environment:
-      - SUPERSET_SECRET_KEY=${SUPERSET_SECRET_KEY}
-      - SUPERSET_DATABASE_URI=${SUPERSET_DATABASE_URI}
-      - SUPERSET_CONFIG_PATH=/etc/superset/superset_config.py
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-    volumes:
-      - superset_home:/app/superset_home
-      - ./superset/superset_config.py:/etc/superset/superset_config.py:ro
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      superset:
-        condition: service_started
-    networks:
-      - metanet1
-    command: ["celery", "--app=superset.tasks.celery_app:app", "beat"]
-
-networks:
-  metanet1:
-    driver: bridge
-
 volumes:
   pgdata:
-  superset_home:
