@@ -1,4 +1,5 @@
 {
-    "ruff.configuration": "${workspaceFolder}/pyproject.toml"
+    "ruff.configuration": "${workspaceFolder}/pyproject.toml",
+    "python-envs.pythonProjects": []
 
 }

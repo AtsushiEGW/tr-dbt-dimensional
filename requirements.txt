@@ -11,5 +11,8 @@ pyarrow
 pyyaml
 playwright
 sqlalchemy
-jupyter
 python-dateutil
+duckdb
+marimo
+sqlglot
+plotly

@@ -246,5 +246,35 @@ docker-superset-init:
 	@$(COMPOSE) exec superset bash -lc "$(SPS) init"
 
 
-docker-start:
-	docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml up -d db redis superset-worker superset-beat
+
+.PHONY: cat-files
+
+output-files := cat-files.txt
+
+cat-files:
+	@echo "===== ingestion/utils.py =====" > $(output-files)
+	@cat ingestion/utils.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/pipelines/clean_landing.py =====" >> $(output-files)
+	@cat ingestion/pipelines/clean_landing.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/pipelines/csv_to_db.py =====" >> $(output-files)
+	@cat ingestion/pipelines/csv_to_db.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/pipelines/land_import.py =====" >> $(output-files)
+	@cat ingestion/pipelines/land_import.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/pipelines/promote.py =====" >> $(output-files)
+	@cat ingestion/pipelines/promote.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/pipelines/validate.py =====" >> $(output-files)
+	@cat ingestion/pipelines/validate.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/pipelines/replay.py =====" >> $(output-files)
+	@cat ingestion/pipelines/replay.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/pipelines/ingest_flow.py =====" >> $(output-files)
+	@cat ingestion/pipelines/ingest_flow.py >> $(output-files)
+
+	@echo "\n\n===== ingestion/config/tables.yml =====" >> $(output-files)
+	@cat ingestion/config/tables.yml >> $(output-files)

@@ -2,14 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import io
+import os
 import sys
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import pandas as pd
 import yaml
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from ingestion.utils import (
-    get_duckdb_conn, ensure_schema, get_paths
+    get_engine, ensure_schema, get_paths,
+    table_exists, get_table_columns, create_text_table, add_missing_text_columns
 )
 
 # ---------------------------
@@ -134,6 +141,16 @@ def _analyze_headers(files: list[Path], encoding: str, rowskip: int) -> tuple[li
         norm_by_file[f] = norm
 
     return union_cols, norm_by_file
+
+# ---------------------------
+# DuckDB Operations
+# ---------------------------
+
+def _ensure_duckdb_table_schema(conn: duckdb.DuckDBPyConnection, table_name: str, columns: list[str], pk_cols: list[str]):
+
+
+
+
 
 
 def _dedupe_temp_by_pk(engine: Engine, temp_fqtn: str, pk_cols: list[str]):
