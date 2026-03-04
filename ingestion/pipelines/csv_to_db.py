@@ -2,28 +2,31 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import pandas as pd
 import yaml
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from ingestion.utils import (
-    get_duckdb_conn, ensure_schema, get_paths
+    get_engine, ensure_schema, get_paths,
+    table_exists, get_table_columns, create_text_table, add_missing_text_columns
 )
 
 # ---------------------------
 # Paths / Config
 # ---------------------------
 HERE: Path = Path(__file__).parent
-CFG_PATH: Path = HERE.parent / "config" / "tables.yml"   # ingestion/config/tables.yml
+CFG_PATH: Path = HERE.parent / "config" / "tables.yml"
 TARGET_SCHEMA = os.getenv("TARGET_SCHEMA", "raw")
-PATHS = get_paths()  # dict[str, Path]
+PATHS = get_paths()
 
 
-# ---------------------------
-# Config loader (defaults merge)
-# ---------------------------
 def load_config() -> dict:
     with CFG_PATH.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -32,16 +35,12 @@ def load_config() -> dict:
     defaults = cfg.get("defaults", {})
     merged_tables = {}
     for name, spec in cfg["tables"].items():
-        merged_tables[name] = (defaults | spec)  # Py3.9+ dict merge
+        merged_tables[name] = (defaults | spec)
     cfg["tables"] = merged_tables
     return cfg
 
 
-# ---------------------------
-# Helpers: files & headers
-# ---------------------------
 def _iter_csv_files(folder_root: Path, folder: str, pattern: str) -> list[Path]:
-    """folder_root/folder 配下で pattern にマッチする CSV を昇順列挙"""
     base = folder_root / folder
     if not base.exists():
         print(f"[warn] base folder not found: {base}")
@@ -50,10 +49,6 @@ def _iter_csv_files(folder_root: Path, folder: str, pattern: str) -> list[Path]:
 
 
 def _ensure_utf8_copy(path: Path, src_encoding: str) -> Path:
-    """
-    入力が UTF-8 以外なら UTF-8 に変換した一時ファイルを作って返す。
-    UTF-8/UTF-8-SIG の場合は元の path を返す。
-    """
     enc = (src_encoding or "utf-8").lower()
     if enc in ("utf-8", "utf8", "utf-8-sig"):
         return path
@@ -65,10 +60,6 @@ def _ensure_utf8_copy(path: Path, src_encoding: str) -> Path:
 
 
 def _read_header_raw(path: Path, encoding: str, rowskip: int = 0) -> list[str]:
-    """
-    “CSVのヘッダ行”を取得。rowskip > 0 ならその行数だけ読み飛ばしてからヘッダ1行を読む。
-    重複カラム名をそのまま得るため pandas ではなく csv.reader を使う。
-    """
     import csv
     with path.open("r", encoding=encoding, newline="") as f:
         for _ in range(rowskip):
@@ -79,18 +70,12 @@ def _read_header_raw(path: Path, encoding: str, rowskip: int = 0) -> list[str]:
             hdr = next(reader)
         except StopIteration:
             return []
-    # BOM の除去（UTF-8-SIG）
     if hdr and isinstance(hdr[0], str) and hdr[0].startswith("\ufeff"):
         hdr[0] = hdr[0].lstrip("\ufeff")
     return hdr
 
 
 def _analyze_headers(files: list[Path], encoding: str, rowskip: int) -> tuple[list[str], dict[Path, list[str]]]:
-    """
-    全ファイルのヘッダを解析し、
-      - union_cols: 和集合（各ベース名の最大多重度分だけ xxx_1..xxx_k を展開。最初の出現順）
-      - norm_by_file: 各ファイルに対する“正規化済みヘッダ名配列”
-    """
     if not files:
         return [], {}
 
@@ -139,67 +124,49 @@ def _analyze_headers(files: list[Path], encoding: str, rowskip: int) -> tuple[li
 def _dedupe_temp_by_pk(engine: Engine, temp_fqtn: str, pk_cols: list[str]):
     """
     TEMP 内の主キー重複を「後勝ち（最後に入った行が残る）」に正規化。
-    これで ON CONFLICT が 1回の INSERT に対して複数ヒットせず安全に動く。
+    DuckDB では ctid ではなく rowid を使用し、MAX(rowid) を残します。
     """
     if not pk_cols:
         return
-    pk_eq = " AND ".join([f't."{c}" = d."{c}"' for c in pk_cols])
     sql = f"""
-        DELETE FROM {temp_fqtn} t
-        USING {temp_fqtn} d
-        WHERE {pk_eq}
-          AND t.ctid < d.ctid;
+        DELETE FROM {temp_fqtn}
+        WHERE rowid NOT IN (
+            SELECT MAX(rowid)
+            FROM {temp_fqtn}
+            GROUP BY {", ".join([f'"{c}"' for c in pk_cols])}
+        );
     """
     with engine.begin() as conn:
         conn.execute(text(sql))
 
 
-# ---------------------------
-# COPY
-# ---------------------------
 def _copy_df_to_table(engine: Engine, df: pd.DataFrame, table_fqtn: str, columns: list[str]):
-    """DataFrame を CSV にして COPY。空欄は NULL '' で本物 NULL に変換。"""
+    """DuckDB のネイティブ機能を利用して DataFrame を直接テーブルにインサート"""
     if df.empty:
         return
     df2 = df.reindex(columns=columns)
-    df2 = df2.where(pd.notna(df2), "")  # NaN/NA → ""
-
-    buf = io.StringIO()
-    df2.to_csv(buf, index=False, header=False)
-    buf.seek(0)
+    df2 = df2.where(pd.notna(df2), None)  # DuckDB では None が NULL として扱われます
 
     raw_conn = engine.raw_connection()
     try:
-        cur = raw_conn.cursor()
-        try:
-            cols_sql = ", ".join([f'"{c}"' for c in columns])
-            cur.copy_expert(
-                sql=f'COPY {table_fqtn} ({cols_sql}) FROM STDIN WITH (FORMAT CSV, NULL \'\')',
-                file=buf,
-            )
-        finally:
-            cur.close()
-        raw_conn.commit()
+        duck_conn = raw_conn.connection
+        # DuckDBコネクションに DataFrame を一時登録して高速 INSERT
+        duck_conn.register("temp_df", df2)
+        duck_conn.execute(f"INSERT INTO {table_fqtn} SELECT * FROM temp_df")
+        duck_conn.unregister("temp_df")
     finally:
         raw_conn.close()
 
 
-# ---------------------------
-# TEMP TABLE
-# ---------------------------
 def _make_temp_text_table(engine: Engine, columns: list[str]) -> str:
-    """TEXT 列の TEMP TABLE を作成して FQTN (pg_temp.<name>) を返す。"""
+    """TEXT 列の TEMP TABLE を作成してテーブル名を返す。DuckDB は pg_temp 不要。"""
     temp_name = f"stg_{int(datetime.now().timestamp())}_{os.getpid()}"
-    temp_fqtn = f"pg_temp.{temp_name}"
     cols_sql = ", ".join([f'"{c}" TEXT' for c in columns])
     with engine.begin() as conn:
-        conn.execute(text(f'CREATE TEMP TABLE {temp_fqtn} ({cols_sql});'))
-    return temp_fqtn
+        conn.execute(text(f'CREATE TEMP TABLE "{temp_name}" ({cols_sql});'))
+    return f'"{temp_name}"'
 
 
-# ---------------------------
-# UPSERT
-# ---------------------------
 def upsert_table(
     engine: Engine,
     table_name: str,
@@ -208,28 +175,21 @@ def upsert_table(
     chunksize: int,
     auto_add_columns: bool,
 ):
-    """
-    設定（encoding / rowskip など）を反映しつつ、
-    db_ingestion 配下の CSV → UTF-8 正規化 → TEMP → UPSERT。
-    ※ 末尾カンマの正規化は上流（fetch/landing まで）で実施し、この段階では考慮しない。
-    """
     folder = cfg["folder"]
     pattern = cfg.get("filename_glob", "*.csv")
     pk_cols = cfg["primary_key"]
-    encoding = cfg.get("encoding", "utf-8")   # defaults からマージ済み
-    rowskip = int(cfg.get("rowskip", 0))      # ← rowskip を使用
+    encoding = cfg.get("encoding", "utf-8")
+    rowskip = int(cfg.get("rowskip", 0))
 
     schema = TARGET_SCHEMA
     target_base = cfg.get("target_table", table_name)
     target_fqtn = f'"{schema}"."{target_base}"'
 
-    # 1) 対象 CSV の列挙
     src_files = _iter_csv_files(csv_root, folder, pattern)
     if not src_files:
         print(f"[{table_name}] No CSV files under {(csv_root / folder)}")
         return
 
-    # 2) 必要なら UTF-8 一時ファイルへ変換（cp932 等）
     processed_files: list[Path] = []
     tmp_to_cleanup: list[Path] = []
     for f in src_files:
@@ -239,13 +199,11 @@ def upsert_table(
             tmp_to_cleanup.append(g)
 
     try:
-        # 3) ヘッダ解析（rowskip を反映）
         union_cols, norm_by_file = _analyze_headers(processed_files, encoding="utf-8", rowskip=rowskip)
         if not union_cols:
             print(f"[{table_name}] WARNING: header not found")
             return
 
-        # 4) 取り込み先テーブルの用意
         if not table_exists(engine, schema, target_base):
             create_text_table(engine, schema, target_base, union_cols, pk_cols)
             db_columns = union_cols[:]
@@ -260,38 +218,36 @@ def upsert_table(
                 else:
                     print(f'[{table_name}] WARNING: New columns ignored (use --auto-add-columns): {", ".join(missing)}')
 
-        # 5) TEMP(TEXT) 作成
         temp_fqtn = _make_temp_text_table(engine, db_columns)
+        
+        # Temp テーブルへの INDEX 作成 (DuckDBでは明示的なインデックス名が必要)
         if pk_cols:
             with engine.begin() as conn:
                 idx_cols = ", ".join([f'"{c}"' for c in pk_cols])
-                conn.execute(text(f'CREATE INDEX ON {temp_fqtn} ({idx_cols});'))
+                temp_clean_name = temp_fqtn.replace('"', '')
+                conn.execute(text(f'CREATE INDEX idx_{temp_clean_name} ON {temp_fqtn} ({idx_cols});'))
 
-        # 6) 読み込み & COPY（UTF-8 ファイル + rowskip）
         for f in processed_files:
             print(f"[{table_name}] Loading {f}")
             norm_cols = norm_by_file[f]
 
             for chunk in pd.read_csv(
                 f,
-                header=0,               # ← “CSVの本来のヘッダ”を使用（データ化しない）
+                header=0,
                 dtype=str,
                 chunksize=chunksize,
                 na_filter=True,
-                keep_default_na=False,  # 'NA' などは文字として扱う
-                na_values=[""],         # 空欄のみ欠損 → COPY で NULL
+                keep_default_na=False,
+                na_values=[""],
                 encoding="utf-8",
-                skiprows=rowskip,       # ← テーブルごとのメタ行スキップ
+                skiprows=rowskip,
             ):
-                # 列名を正規化ヘッダに差し替え（重複ヘッダは _1,_2,... で一意化済み）
                 chunk.columns = norm_cols
 
-                # PK 欠損を捨てる（UPSERT できない）
                 for pk in pk_cols:
                     if pk in chunk.columns:
                         chunk = chunk[chunk[pk].notna() & (chunk[pk] != "")]
 
-                # DB 列に合わせる（欠け列は追加、余分は落とす）
                 for c in db_columns:
                     if c not in chunk.columns:
                         chunk[c] = pd.NA
@@ -299,15 +255,15 @@ def upsert_table(
 
                 _copy_df_to_table(engine, chunk, temp_fqtn, db_columns)
 
-        # 7) TEMP 内で主キー重複を「後勝ち」に正規化
         _dedupe_temp_by_pk(engine, temp_fqtn, pk_cols)
 
-        # 8) UPSERT
         non_key_cols = [c for c in db_columns if c not in pk_cols]
         set_clause = (
             "SET " + ", ".join([f'"{c}"=EXCLUDED."{c}"' for c in non_key_cols])
             if non_key_cols else "DO NOTHING"
         )
+        
+        # DuckDB の UPSERT (ON CONFLICT) 構文
         upsert_sql = f"""
             INSERT INTO {target_fqtn} ({", ".join([f'"{c}"' for c in db_columns])})
             SELECT {", ".join([f'"{c}"' for c in db_columns])} FROM {temp_fqtn}
@@ -320,7 +276,6 @@ def upsert_table(
         print(f"[{table_name}] Upsert completed.")
 
     finally:
-        # 変換で作った一時 UTF-8 ファイルを掃除
         for p in tmp_to_cleanup:
             try:
                 p.unlink()
@@ -328,10 +283,8 @@ def upsert_table(
                 pass
 
 
-# ---------------------------
-# SNAPSHOT (Parquet)
-# ---------------------------
 def snapshot_table_to_parquet(engine: Engine, table_name: str, out_root: Path):
+    """Pandas を経由せず、DuckDB の機能で直接 Parquet に書き出すよう高速化"""
     schema = TARGET_SCHEMA
     fqtn = f'"{schema}"."{table_name}"'
     date_folder = out_root / datetime.now().strftime("%Y%m%d")
@@ -339,15 +292,11 @@ def snapshot_table_to_parquet(engine: Engine, table_name: str, out_root: Path):
     out_path = date_folder / f"{table_name}.parquet"
 
     print(f"[snapshot] {fqtn} -> {out_path}")
-    with engine.connect() as conn:
-        df = pd.read_sql(f"SELECT * FROM {fqtn}", conn)
-    df.to_parquet(out_path, index=False)
+    with engine.begin() as conn:
+        conn.execute(text(f"COPY {fqtn} TO '{out_path}' (FORMAT PARQUET)"))
     print(f"[snapshot] Wrote {out_path}")
 
 
-# ---------------------------
-# CLEAN CSVs (db_ingestion 配下)
-# ---------------------------
 def clean_old_csvs(csv_root: Path, archive_root: Path | None, retention_days: int, dry_run: bool = True):
     cutoff = datetime.now() - timedelta(days=retention_days)
     total = 0
@@ -372,9 +321,6 @@ def clean_old_csvs(csv_root: Path, archive_root: Path | None, retention_days: in
     print(f"[clean] targets={total}, dry_run={dry_run}")
 
 
-# ---------------------------
-# CLI
-# ---------------------------
 def cmd_ingest(args):
     engine = get_engine()
     ensure_schema(engine, TARGET_SCHEMA)
@@ -415,18 +361,18 @@ def cmd_clean(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="csv_to_db",
-        description="CSV ingestion -> Postgres upsert (TEXT + NULL blanks) -> Parquet snapshot",
+        description="CSV ingestion -> DuckDB upsert (TEXT + NULL blanks) -> Parquet snapshot",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_ing = sub.add_parser("ingest", help="ingest CSVs and UPSERT into Postgres (raw TEXT)")
+    p_ing = sub.add_parser("ingest", help="ingest CSVs and UPSERT into DuckDB (raw TEXT)")
     p_ing.add_argument("--table", help="single table to ingest (default: all)")
     p_ing.add_argument("--chunksize", type=int, default=200_000, help="pandas read_csv chunksize (fallback)")
     p_ing.add_argument("--auto-add-columns", action="store_true",
                        help="if CSV has new columns, ALTER TABLE ADD COLUMN (TEXT)")
     p_ing.set_defaults(func=cmd_ingest)
 
-    p_snap = sub.add_parser("snapshot", help="export tables from Postgres to Parquet")
+    p_snap = sub.add_parser("snapshot", help="export tables from DuckDB to Parquet")
     p_snap.add_argument("--table", help="single table to snapshot (default: all)")
     p_snap.set_defaults(func=cmd_snapshot)
 
