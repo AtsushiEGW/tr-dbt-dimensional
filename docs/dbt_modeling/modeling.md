@@ -72,6 +72,111 @@ DuckDBは列指向で集計処理が非常に高速なため、BIツール側（
 
 この流れの中で、例えば「`order_detail` から `order_id` ごとに最悪の品質のアイテムを抽出して集計する `int_` テーブル」の具体的なdbt SQL（Window関数を使った記述など）を見てみたいといったご希望はありますでしょうか？
 
+### 時系列ごとの集計をBIでやらせることについて
+
+ご推察の通りです。そのレベルの複雑な計算（Window関数を用いたTop-Nのランキング、全体に対する割合の算出、そして行から列へのピボット展開）をBIツール側に任せるのは、パフォーマンスの悪化やBI側での「CTE地獄」を引き起こす典型的なアンチパターンとなります。
+
+特に、EvidenceのようなSQLベースでダッシュボードを構築するツールを使用する場合、BI側には「可能な限りシンプルなSELECT文で済む、完成された横持ちのテーブル」を渡すのがベストプラクティスです。
+
+このような「特定のビジネスロジックに強く依存し、形が大きく変わる集計」は、まさに **dbtのMarts層（Aggregate Marts）で処理すべき領域** です。
+
+中間テーブルを無駄に増やさず、かつWeekly, Monthly, QuarterlyのロジックをDRY（繰り返しを避ける）に保つためには、**dbtのJinjaマクロを活用して集計ロジックを抽象化し、3つのMartsモデルからそのマクロを呼び出す**という設計が最も美しく機能します。
+
+具体的な実装アーキテクチャは以下のようになります。
+
+### 1. マクロの定義（ロジックの一元化）
+
+まず、`macros/` ディレクトリに、任意の期間（grain）と順位（Top N）を受け取って横持ちのテーブルを生成するマクロを作成します。これにより、CTEの記述はプロジェクト内でこの1箇所だけで済みます。
+
+**`macros/generate_top_products_report.sql`**
+
+```sql
+{% macro generate_top_products_report(time_grain, top_n=3) %}
+
+WITH base_sales AS (
+    -- 1. 指定された期間・商品ごとの売上を集計
+    SELECT
+        DATE_TRUNC('{{ time_grain }}', order_date) AS period,
+        product_id,
+        SUM(price) AS product_sales -- ※単価×数量など、実際の要件に合わせて調整
+    FROM {{ ref('fct_order_details') }}
+    GROUP BY 1, 2
+),
+
+period_totals AS (
+    -- 2. その期間の総売上を計算（構成比の分母）
+    SELECT
+        period,
+        SUM(product_sales) AS total_period_sales
+    FROM base_sales
+    GROUP BY 1
+),
+
+ranked_products AS (
+    -- 3. Window関数で順位付けと構成比の計算
+    SELECT
+        b.period,
+        b.product_id,
+        b.product_sales,
+        (b.product_sales * 1.0 / p.total_period_sales) AS sales_pct,
+        ROW_NUMBER() OVER(PARTITION BY b.period ORDER BY b.product_sales DESC) AS sales_rank
+    FROM base_sales b
+    JOIN period_totals p ON b.period = p.period
+)
+
+-- 4. 横持ち（ピボット）への展開
+SELECT
+    period,
+    {% for i in range(1, top_n + 1) %}
+    MAX(CASE WHEN sales_rank = {{ i }} THEN product_id END) AS top_{{ i }}_product_id,
+    MAX(CASE WHEN sales_rank = {{ i }} THEN product_sales END) AS top_{{ i }}_sales,
+    MAX(CASE WHEN sales_rank = {{ i }} THEN sales_pct END) AS top_{{ i }}_sales_pct{% if not loop.last %},{% endif %}
+    {% endfor %}
+FROM ranked_products
+WHERE sales_rank <= {{ top_n }}
+GROUP BY 1
+
+{% endmacro %}
+
+```
+
+### 2. Martsモデルの作成（マクロの呼び出し）
+
+あとは、`marts/` ディレクトリにそれぞれの期間用のモデルを作成し、1行でマクロを呼び出すだけです。
+
+**`marts/mart_weekly_top_products.sql`**
+
+```sql
+{{ generate_top_products_report(time_grain='week') }}
+
+```
+
+**`marts/mart_monthly_top_products.sql`**
+
+```sql
+{{ generate_top_products_report(time_grain='month') }}
+
+```
+
+**`marts/mart_quarterly_top_products.sql`**
+
+```sql
+{{ generate_top_products_report(time_grain='quarter') }}
+
+```
+
+---
+
+### この設計のメリット
+
+1. **中間テーブルが増えない:** `fct_order_details` から直接最終的なMartsを生成するため、一時的なテーブルがデータベース上に作られません。
+2. **圧倒的な保守性:** 売上の定義が変わったり、「Top 3ではなくTop 5が見たい」となった場合でも、マクロの引数や計算式を1箇所修正するだけで、Weekly/Monthly/Quarterlyの全てに適用されます。
+3. **DuckDBの強みを活かせる:** DuckDBはメモリ上でのWindow関数の処理や列指向の集計が非常に高速です。この程度の複雑なクエリであれば、事前の細かな中間集計テーブル（`int_`層での日次集計など）を挟まなくても、高速に処理を完了できます。
+
+このように、データモデリングの基礎となるFact/Dimensionを綺麗に整えた上で、最終的なBIツール向けの複雑な整形は「Marts層 × マクロ」で吸収するアプローチをとることで、基盤全体の風通しが格段に良くなります。
+
+このマクロのロジックに、例えば「商品名（`product_name`）も横持ちの中に含めたい」といった場合は、DimテーブルをどのようにJOINさせるのが最も効率的か、構成案を広げてみましょうか？
+
 
 
 
@@ -471,3 +576,130 @@ distinct が必要なら upstream grain を疑う
 
 まで具体化して出します。
 
+
+
+---------------- dbtモデル再構築手順 -------------------
+そのアプローチ、リファクタリング（コードの再構築）を進める上で非常に堅実で良いですね！「現行のロジックを守りつつ、新しいロジックを育てる」という進め方は、データエンジニアリングの王道です。
+
+ただ、dbt の仕様上、いくつか**「ハマりやすいポイント」**と、それをスマートに解決する設定方法があります。
+
+---
+
+## 1. 最大の注意点：モデル名の重複
+
+dbt では、フォルダが違っても**「同じファイル名の SQL」を一つのプロジェクト内に共存させることはできません。**
+
+* `models/marts/orders.sql`
+* `models/sandbox/orders.sql`
+
+この状態で `dbt run` をすると、「モデル名が重複しています」というコンパイルエラーになります。
+
+### 解決策
+
+sandbox 内のファイル名に接頭辞（プレフィックス）をつけるのが最も簡単です。
+
+* 例：`models/sandbox/sb_orders.sql`
+
+---
+
+## 2. dbt_project.yml の設定
+
+`sandbox/` フォルダ配下のモデルに対して、一括で設定を適用できます。
+
+ここでは、**「sandbox 配下のモデルは、本番とは別のスキーマに出力する」**設定を入れるのが安全です。これにより、本番テーブルを誤って上書きするリスクをゼロにできます。
+
+```yaml
+models:
+  my_project_name:
+    # 既存のモデル設定
+    marts:
+      materialized: table
+      
+    # sandbox フォルダ専用の設定
+    sandbox:
+      +materialized: view  # 開発中は view にしておくと DB 負荷が軽い
+      +schema: sandbox     # デフォルトのスキーマ名に "_sandbox" が付与される
+
+```
+
+> [!NOTE]
+> `+schema: sandbox` と書くと、profiles.yml で指定したスキーマ名（例: `public`）の後ろに連結され、`public_sandbox` というスキーマに作成されます。
+
+---
+
+## 3. sandbox だけを実行する方法
+
+特定のフォルダ配下だけを実行するのは、dbt の得意分野です。`--select`（または `-s`）フラグを使います。
+
+* **sandbox フォルダの中身だけをすべて実行:**
+```bash
+dbt run --select path:models/sandbox
+# または単純に
+dbt run --select sandbox
+
+```
+
+
+* **sandbox 内の特定のモデルとその下流を実行:**
+```bash
+dbt run --select sb_orders+
+
+```
+
+
+
+---
+
+## 4. プロファイル（profiles.yml）はどうすべき？
+
+基本的には、**新しいプロファイルを作る必要はありません。**
+
+既存のプロファイルの中に `target: dev` や `target: sandbox` という「ターゲット」を追加するだけで十分です。
+
+```yaml
+my_profile:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery (or snowflake etc)
+      schema: dev_user1  # あなたの個人用スキーマ
+      ...
+    sandbox_verify:
+      type: bigquery
+      schema: integration_test  # 検証用の共通スキーマ
+      ...
+
+```
+
+実行時に `--target sandbox_verify` と切り替えることで、接続先やデフォルトのスキーマを制御できます。
+
+---
+
+## 5. 【プロの推奨】新旧データの比較方法
+
+「現行のものと同じものが出力できたら切り替える」という検証作業には、dbt のパッケージ **`audit_helper`** を使うのが標準的です。
+
+手動で SQL を書いて比較するよりも、圧倒的に速く、正確に「差分（レコードのズレ）」を見つけられます。
+
+### audit_helper の `compare_relations` マクロの例
+
+sandbox に作成した新モデルと、現行モデルを比較する SQL を一つ作ります。
+
+```sql
+{# models/sandbox/check_diff.sql #}
+{{ audit_helper.compare_relations(
+    ref('orders'),        -- 現行モデル
+    ref('sb_orders')      -- 再構築したモデル
+) }}
+
+```
+
+これを `dbt run` すると、「一致率 100%」かどうかが一目でわかる表が出力されます。
+
+---
+
+### 次のステップへの提案
+
+もしよろしければ、**「再構築したいモデルの現在の構成（テーブルかビューか、データ量など）」**を教えていただければ、より具体的な `dbt_project.yml` の書き方や、`audit_helper` のセットアップ方法を詳しく解説できますがいかがでしょうか？
+
+なお、各種アプリのすべての機能を使用するには、[Gemini アプリ アクティビティ](https://myactivity.google.com/product/gemini)を有効にする必要があります。
