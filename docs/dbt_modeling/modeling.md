@@ -703,3 +703,208 @@ sandbox に作成した新モデルと、現行モデルを比較する SQL を�
 もしよろしければ、**「再構築したいモデルの現在の構成（テーブルかビューか、データ量など）」**を教えていただければ、より具体的な `dbt_project.yml` の書き方や、`audit_helper` のセットアップ方法を詳しく解説できますがいかがでしょうか？
 
 なお、各種アプリのすべての機能を使用するには、[Gemini アプリ アクティビティ](https://myactivity.google.com/product/gemini)を有効にする必要があります。
+
+
+
+
+
+
+
+Dimension tables are the foundation of powerful analytics. You have already learned much
+about them in previous chapters. These fundamentals, however, do not address a variety
+of real-world concerns that you are likely to encounter. The next several chapters move
+beyond the basics, covering a progression of advanced dimension design topics. Mastery of
+these topics will prepare you to confront real-world complexity and respond to it with
+simple and powerful solutions.
+If you are not reading this book from cover to cover, you may be drawn to this chapter
+because you have a question involving dimensions. Some of what you are looking for may
+have appeared in prior chapters. Here is a quick recap of what has already been covered:
+Chapter 1 introduced the dimension
+• as a fundamental part of the dimensional
+model, providing a context for facts and enabling rich and powerful reporting.
+Techniques were provided to identify dimensions in reports and the spoken word,
+and the star schema was introduced.
+• in detail, from its rich set of attributes to
+Chapter 3 described the dimension table
+its use of surrogate keys to the ways in which type 1 and type 2 slowly changing
+dimensions represent history.
+Chapter 5 explained conformed dimensions
+• , which enable cross-process analysis
+through a procedure called drilling across. The key to scaling across subject areas,
+conformed dimensions allow fact tables to work together to produce powerful
+reports.
+This chapter builds on these fundamentals to address a handful of the more
+complicated issues surrounding dimension design. It is divided into five sections, covering
+the following topics:
+• describes how to identify when dimensions
+“Grouping Dimensions into Tables”
+belong in the same table and when they should be placed in separate tables.
+• explains what to do, and what not to do, when
+“Breaking Up Large Dimensions”
+dimension tables would be too large to maintain effectively. Several alternatives are
+explored, including the mini-dimension, which has the unique ability to stem
+growth without sacrificing detail.
+• covers what happens when a fact table has multiple
+“Dimension Roles and Aliasing”
+relationships to a single dimension table. These relationships are called roles, and
+they do not require making copies of the dimension table. Multiple roles can be
+addressed in a single query through SQL aliasing.
+• describes the analytic headaches caused by NULL values, and
+“Avoiding the NULL”
+how to avoid them. NULL foreign keys in fact tables are also avoidable through
+“special-case rows.” These are used when a fact table has an optional relationship to
+a dimension, when the dimensional context for a fact is invalid, and when facts
+arrive at the data warehouse before the dimensional detail is available.
+“Behavioral Dimensions”
+• describes how facts can be turned into additional dimensions,
+enabling past history to provide context for facts in very powerful reports.
+This collection of topics is just the beginning of your tour of advanced dimension
+techniques. Future chapters will explore hierarchies, snowflakes, and outriggers, provide
+more techniques for slowly changing dimensions, solve the problem of multi-valued
+attributes, and look at recursive hierarchies.
+Grouping Dimensions into Tables
+Experienced designers don’t usually have difficulty in determining how to group dimension
+attributes into tables. Most dimension tables correspond to categories of analysis that hold
+deep significance to the business and are evident on a prima facie basis. There are times,
+however, when you will be uncertain as to the best way to organize dimensions into tables.
+Some of this uncertainty can be attributed to the nature of dimensional modeling.
+Unlike an entity-relationship (ER) model, a dimensional model does not expose every
+relationship between attributes as a join. Recognizing this difference is the first step toward
+sorting out a confusing situation. Relationships that are contextual tend to pass through
+fact tables, while natural affinities are represented by co-locating attributes in the same
+dimension table. If consideration of these characteristics does not help, you can make the
+decision by considering the implications for the usability of the schema.
+Two Ways of Relating Dimension Attributes
+In a star schema, the relationship between a given pair of dimension attributes may be
+expressed explicitly or implicitly. Dimensional modelers do not think about dimensions in
+these terms, but those with a background in entity-relationship modeling may be confused
+until this distinction is brought to light.
+Relationships of the explicit variety are the most familiar. They take the form of joins
+that intersect in a fact table, which provides an important context for the relationship. The
+dimensions may be related in other contexts as well, as represented by other fact tables.
+Explicit relationships between dimension rows may be numerous and volatile.
+Less familiar are implicit relationships, which occur when two attributes are located in
+the same table. Implicit relationships imply a natural affinity between attributes, rather
+than a relationship that can take many contexts. These relationships tend to be more
+consistent, and they are browsable.
+Explicit Relationships Describe Context
+As you have already learned, every fact table bears foreign key references to dimension
+tables. These references provide the dimensional context for the facts. These joins can also
+be thought of as providing information about relationships between the dimension tables.
+The business process measured by the fact table is the context for this relationship.
+Once again, we will turn to the orders process for an example. Figure 6-1 reprises the
+orders star that was introduced in Chapter 1 and embellished in Chapter 3. The grain of
+the fact table is the individual order line. Dimension tables represent the day of an order,
+the product being ordered, the customer who placed the order, and the salesperson who
+took the order. Degenerate dimensions identify the particular order line, and the junk
+dimension order_info specifies miscellaneous characteristics of the order.
+Each row in this fact table refers to a specific day, product, customer, salesperson, and
+order. For example, a fact table row may record the fact that on January 1, 2008 (a day),
+Hal Smith (a salesperson) took an order for 100 black ballpoint pens (a product) from
+ABC Stationery Emporium (a customer) as part of order number 299113. The fact table
+row records a relationship among these instances of day, salesperson, product, customer,
+and order. They are related to one another in the context of this particular order.
+Each of these dimension instances—ABC Stationery, Hal Smith, January 1, black
+ballpoint pens—may be related in other ways as well. ABC Stationery Emporium may have
+ordered other things from Hal Smith, perhaps on the same order or perhaps on completely
+different days. All of these relationships are made explicit by recording additional rows in
+the fact table, using the appropriate foreign keys. Each of these is a separate relationship in
+the context of an order.
+These dimensions can also be related in other contexts. A customer and salesperson,
+for example, may also become related when a proposal is presented, a product is returned,
+and so forth. If customer and salesperson can be related in different contexts, they belong
+in separate dimension tables. Fact tables will provide the different contexts.
+Those familiar with entity-relationship modeling are doubtless familiar with this type of
+explicit relationship. Every fact table is an example of what ER modelers refer to as an
+intersect table. It resolves a potential many-to-many relationship between each of the
+associated tables. Another type of relationship is implied in dimensional models, one that
+does not involve primary key / foreign key associations.
+Implicit Relationships Describe Affinities
+Unlike an entity-relationship model, a dimensional model also includes relationships that
+are not made explicit through joins. Although dimensional modelers do not think about
+their models in these terms, this distinction can be a source of confusion for ER modelers
+who are new to star schema design.
+Relationships between dimension attributes can be implied through their coexistence
+in a table. These relationships tend to exist only in a single context, representing a natural
+affinity rather than one based on process activities. The relationships among attributes in a
+dimension table may change over time but tend to be less volatile than those of the explicit
+variety. When implicit relationships do change, their history can be preserved through a
+type 2 slow change response.
+The orders star from Figure 6-1 contains many examples of implicit relationships.
+Within the product table, for example, are dimension attributes called product and brand.
+Since more than one product may share the same brand, an ER model would isolate these
+attributes in separate tables, relating them via a primary key / foreign key relationship. This
+approach makes sense in the context of an operational system, which must often support
+a high volume of concurrent transactions inserting, updating, and deleting data. As you
+learned in Chapter 1, dimensional models are not intended for an operational profile.
+Instead, they are optimized to support queries that potentially aggregate large volumes of data.
+In this context, there is no need to separate brand from product. To do so would
+potentially impact the performance of queries involving large volumes of data by requiring
+additional join processing.
+Unlike the relationship between a customer and salesperson, the relationship between
+a product and brand does not take on multiple contexts. Products and brands are related
+in only one way: membership in a brand. It is a natural affinity that does not depend on the
+execution of business activities. At a given point in time, a particular product has one
+associated brand. This relationship does not depend on a sale, the manufacturing process,
+or other significant processes tracked by the business.
+The relationship is not necessarily constant. It may change over time, and when it does,
+the change history can be tracked. If the brand designation of a particular product changes,
+for example, history can be preserved through a type 2 slow change. A new row is added to
+the dimension table for the product, and this new row contains the new brand designation.
+
+When Struggling with Dimension Groupings
+Those new to the dimensional approach may face situations where they are not sure whether
+two dimensions belong in the same dimension table. If salespeople are assigned to customers,
+why separate customer and salesperson into different tables, as is done in Figure 6-1? Why not
+place them together? How about making brand a dimension table and including its surrogate
+key in the fact table?
+Rather than attempt to resolve these questions using the language of ER modeling, it is
+best to look at the ways in which the attributes relate and the ways in which they are used.
+For a given pair of attributes, consider the context of the relationship. Do they share a
+natural affinity, or can they be related in different contexts? Those that tend to share a
+stable affinity may be stored together; those that tend to be related only in the context of
+events, transactions, or conditions belong in separate fact tables. When in doubt, you can
+consider the browsability of alternative designs.
+Grouping Dimensions Based on Affinity
+In a dimensional model, dimensions are grouped into tables based on natural affinity.
+Products and brands, for example, are related to one another prior to an order being
+placed. A transaction is not required to establish a relationship between these elements.
+In fact, a product has a brand even if there are no orders for it. More importantly, these
+attributes can only be related in one way, or one context.
+On the other hand, some elements are only related based on transactions or activities.
+Salespeople and customers, for example, are brought together only when transactions, such
+as orders, occur. These attributes, therefore, belong in separate tables; their relationships
+will be captured in the fact table. This allows customers and salespeople to have numerous
+interactions, perhaps even in different pairings. The relationships are defined by the
+transactions.
+Looking deeper, you may also realize that salespeople and customers may be related in
+multiple contexts. For example, salespeople may be assigned to customers, they may take
+calls from customers, and they may visit customers. Each of these relationships flows from a
+different process and can be thought of as an activity or transaction: an assignment of a
+salesperson to a customer, a phone call being made, or a visit to a customer site. These
+various associations can be captured through a series of fact tables, each representing a
+different process. As described in Chapter 5, these relationship chains may offer rich
+analytic possibilities when used individually or compared.
+The Browsability Test
+If you are not sure whether two attributes belong together in a dimension table, consider
+how they will be used. Recall from Chapter 1 that a query focused on the values within a
+dimension is called a browse query. Natural affinities like product and brand can be
+separated from transactional relationships like customers and salespeople by evaluating
+browsability. Would someone want to browse the values of these attributes together? Placing
+them in separate dimensions would prevent this.
+The separation of product and brand, as shown in Figure 6-2, destroys the browsability
+of these attributes. In this configuration, it is only possible to study the intersection of
+products and brands in the context of orders. If there is no order for a particular product,
+it will not be possible to identify its brand. It makes more sense to place these attributes in a
+single table. Salespeople and customers, on the other hand, have a relationship only when
+transactions occur. This relationship may also be more volatile. A given customer may speak
+with a different salesperson each time an order is placed. In this case, the transaction
+defines the relationship and is embodied in the fact table.
+The astute reader may observe that in a situation where a business assigns salespeople to
+specific customers, it may be possible to merge their attributes. This would allow users to
+browse the list of customers assigned to a particular salesperson; however, salespeople and
+customers may engage in other activities with various contexts, as noted earlier. Salespeople
+take calls from customers, process returns, and so forth. Clearly, the business considers
+salespeople and customers to be two separate things. If it is necessary to track the assignment
+of customers to salespeople, a factless fact table may be called for. This technique will be
+discussed in Chapter 12, “Factless Fact Tables.”
